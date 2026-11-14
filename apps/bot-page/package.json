@@ -12,6 +12,7 @@
     "create-bot": "node --env-file-if-exists=../../.env scripts/create-bot.js",
     "say": "node --env-file-if-exists=../../.env scripts/say.js",
     "test": "node --test test/*.test.js",
-    "sink": "node --env-file-if-exists=../../.env scripts/dev-sink.js"
+    "sink": "node --env-file-if-exists=../../.env scripts/dev-sink.js",
+    "leave-bot": "node --env-file-if-exists=../../.env scripts/leave-bot.js"
   }
 }

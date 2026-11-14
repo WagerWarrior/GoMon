@@ -111,7 +111,7 @@
     playNext();
   });
 
-  const es = new EventSource("/say/stream" + location.search) // ?callId= scopes this page to one call;
+  const es = new EventSource("/say/stream" + location.search); // ?callId= scopes this page to one call
   es.onopen = () => { document.body.classList.remove("offline"); setFace("listening"); setStatus("listening"); };
   es.onerror = () => { document.body.classList.add("offline"); setFace("vetoed"); setStatus("reconnecting…"); };
   es.addEventListener("say", (ev) => {
