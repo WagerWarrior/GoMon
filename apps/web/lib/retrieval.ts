@@ -3,15 +3,16 @@
  * ported so the workspace and the voice agent rank memories the same way, on the same Atlas indexes:
  *  - memories_auto: Vector Search with Atlas Automated Embedding (Atlas embeds `text` and the query with Voyage)
  *  - memories_text: Atlas Search (lexical, so "R-12" matches)
- * fused with $rankFusion, all pre-filtered to team, project and active. Exact keys and very fresh memories are added
+ * fused with $rankFusion, all pre-filtered to team, active, and the call's project plus company context. Exact keys and very fresh memories are added
  * straight from the collection (the search index tails the oplog). Indexes are created by `apps/worker npm run setup`.
  */
 import type { Db, ObjectId } from "mongodb";
+import { memoryFilter, readableProjects } from "./scope";
 
 export const INDEX = { vector: "memories_auto", text: "memories_text" } as const;
 const FRESH_MS = 60_000;
 
-export type Hit = { _id: ObjectId; key?: string; kind?: string; text: string; version?: number; origin?: string; score: number; via: string[] };
+export type Hit = { _id: ObjectId; key?: string; kind?: string; text: string; version?: number; origin?: string; projectId?: string; score: number; via: string[] };
 type Scope = { teamId: string; projectId: string };
 
 /** Explicit IDs in a question ("R-12", "d 09") as stored keys. */
@@ -36,8 +37,8 @@ export function merge(fused: Hit[], exact: Hit[], fresh: Hit[]): Hit[] {
 }
 
 export async function retrieve(d: Db, scope: Scope, question: string, k = 4, embedModel = process.env.EMBED_MODEL || "voyage-4"): Promise<Hit[]> {
-  const filter = { teamId: scope.teamId, projectId: scope.projectId, status: "active" };
-  const proj = { key: 1, kind: 1, text: 1, origin: 1, version: 1 };
+  const filter = memoryFilter(scope);
+  const proj = { key: 1, kind: 1, text: 1, origin: 1, version: 1, projectId: 1 };
   const col = d.collection("memories");
   const fusedRaw = await col.aggregate<any>([
     { $rankFusion: {
@@ -45,7 +46,7 @@ export async function retrieve(d: Db, scope: Scope, question: string, k = 4, emb
           vector: [{ $vectorSearch: { index: INDEX.vector, path: "text", query: question, model: embedModel, numCandidates: 150, limit: 12, filter } }],
           text: [{ $search: { index: INDEX.text, compound: {
             must: [{ text: { query: question, path: ["text", "key"] } }],
-            filter: [{ equals: { path: "teamId", value: scope.teamId } }, { equals: { path: "projectId", value: scope.projectId } }, { equals: { path: "status", value: "active" } }],
+            filter: [{ equals: { path: "teamId", value: scope.teamId } }, { in: { path: "projectId", value: readableProjects(scope.projectId) } }, { equals: { path: "status", value: "active" } }],
           } } }, { $limit: 12 }],
         } },
         combination: { weights: { vector: 1, text: 1 } }, scoreDetails: true } },

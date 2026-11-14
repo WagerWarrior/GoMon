@@ -28,7 +28,8 @@ export interface Conflict {
   _id: ObjectIdLike | string; callId: string; itemId?: ObjectIdLike | string; memoryId?: ObjectIdLike | string;
   memoryKey?: string; severity: "low" | "medium" | "high"; spoken?: boolean; note?: string; createdAt?: Date | string;
 }
-export type ActionType = "create_issue" | "post_slack";
+/** `github` actions carry `payload.op` (create_issue | update_issue | create_project | add_to_project | create_milestone). */
+export type ActionType = "create_issue" | "post_slack" | "github";
 export type ActionStatus = "queued" | "sending" | "sent" | "confirmed" | "denied" | "failed" | "needs_review";
 export interface ActionDoc {
   _id: ObjectIdLike | string; callId?: string; teamId: string; projectId: string; type: ActionType;
@@ -44,6 +45,12 @@ export interface TimingDoc { _id: ObjectIdLike | string; callId: string; stage: 
 export interface CallDoc {
   _id: ObjectIdLike | string; teamId: string; projectId: string; title?: string; status?: string;
   participants?: string[]; meetingUrl?: string; slackThreadTs?: string; synthetic?: boolean; startedAt?: Date | string;
+  botId?: string; endedAt?: Date | string; ownerUserId?: string;
 }
 export interface Member { _id: ObjectIdLike | string; teamId: string; displayName: string; role: string }
 export interface PolicyDoc { _id: ObjectIdLike | string; teamId: string; projectId?: string; action: string; allowedRoles: string[] }
+/** `projects`: `_id` is a slug; the reserved `company` project holds company-wide context every call reads. */
+export interface ProjectDoc {
+  _id: string; teamId: string; name: string; description?: string; status: "active" | "archived"; createdAt?: Date | string; createdBy?: string;
+  github?: { projectNumber?: number; projectId?: string; url?: string }; synthetic?: boolean;
+}

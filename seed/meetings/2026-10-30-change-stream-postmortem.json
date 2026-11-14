@@ -1,0 +1,29 @@
+{
+  "id": "seed-2026-10-30-change-stream-postmortem",
+  "title": "Atlas incident postmortem: change stream lag",
+  "projectId": "public-api-launch",
+  "startedAt": "2026-10-30T16:00:00Z",
+  "summary": "Postmortem for the October 28 Sev1: the billing change stream consumer fell 19 hours behind after a deploy and nearly ran past the 26-hour oplog window (K-02). Locked D-14: the consumer checkpoints its resume token in Atlas every 1,000 events and pages on-call when lag exceeds 5 minutes, and T-01: Marcus adds the lag alert and a resync runbook before launch.",
+  "utterances": [
+    ["Rob", "Postmortem for Tuesday's Sev1. Marcus, timeline please."],
+    ["Marcus", "Monday 14:00 we deployed the billing consumer. It crashed in a loop on one malformed event and nobody noticed."],
+    ["Marcus", "Tuesday 09:00 finance saw invoices frozen. By then the change stream was 19 hours behind."],
+    ["Priya", "And the oplog window at peak is about 26 hours. We were seven hours from losing the resume token."],
+    ["Rob", "That's K-02. Which means a full resync of usage, during launch prep."],
+    ["Lena", "Why didn't it page?"],
+    ["Marcus", "We alert on consumer process down, not on lag. The process was up, just restarting."],
+    ["Tamir", "So alert on lag directly. Compare the last processed event time with now."],
+    ["Marcus", "And checkpoint the resume token in Atlas every thousand events, so a restart picks up where it left off instead of replaying from memory."],
+    ["Rob", "Proposal: checkpoint every 1,000 events, page on-call when lag passes five minutes."],
+    ["Priya", "Five minutes is tight but billing can tolerate it. Agreed."],
+    ["Max", "Agreed."],
+    ["Rob", "Marcus, can you own the alert plus a resync runbook before launch?"],
+    ["Marcus", "Yes, I'll have both done by November 14."],
+    ["Lena", "Also the malformed event goes to a dead letter collection instead of crashing the loop."],
+    ["Marcus", "Good, I'll fold that into the same change."]
+  ],
+  "locks": [
+    { "key": "D-14", "kind": "decision", "text": "The billing change stream consumer checkpoints its resume token in Atlas every 1,000 events, sends malformed events to a dead-letter collection, and pages on-call when lag exceeds 5 minutes.", "utterances": [7, 8, 9, 10, 11, 14], "lockedBy": "Rob" },
+    { "key": "T-01", "kind": "action", "text": "Marcus adds the change stream lag alert and a resync runbook before the public API launch (due November 14).", "utterances": [12, 13], "lockedBy": "Rob" }
+  ]
+}

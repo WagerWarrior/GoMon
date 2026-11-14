@@ -2,10 +2,11 @@ import type { ObjectId } from "mongodb";
 import { config, INDEX } from "./config.ts";
 import type { Cols } from "./db.ts";
 import type { ItemKind, Memory } from "./shapes.ts";
+import { memoryFilter, readableProjects } from "./scope.ts";
 
 export type Scope = { teamId: string; projectId: string };
 export type Retrieved = {
-  _id: ObjectId; key?: string; kind: ItemKind; text: string; origin: Memory["origin"]; version: number;
+  _id: ObjectId; key?: string; kind: ItemKind; text: string; origin: Memory["origin"]; version: number; projectId?: string;
   score: number; via: string[];
 };
 
@@ -16,11 +17,12 @@ type Fused = Retrieved & { details?: { details?: { inputPipelineName: string; ra
 
 /**
  * Atlas hybrid retrieval: $rankFusion over $vectorSearch (Atlas Automated Embedding: Atlas embeds the query text with
- * Voyage server-side) and $search (lexical, so "R-12" matches), both pre-filtered to the caller's team, project and active
- * status. Another team's memory can never be returned: the filter is part of both index queries, not a post-filter.
+ * Voyage server-side) and $search (lexical, so "R-12" matches), both pre-filtered to the caller's team, active status and
+ * readable projects (the call's project plus company context). Another team's memory can never be returned: the filter is
+ * part of both index queries, not a post-filter.
  */
 export async function retrieve(c: Cols, scope: Scope, query: string, limit = 6): Promise<Retrieved[]> {
-  const filter = { teamId: scope.teamId, projectId: scope.projectId, status: "active" as const };
+  const filter = memoryFilter(scope);
   const pipeline = [
     {
       $rankFusion: {
@@ -35,7 +37,7 @@ export async function retrieve(c: Cols, scope: Scope, query: string, limit = 6):
                     must: [{ text: { query, path: ["text", "key"] } }],
                     filter: [
                       { equals: { path: "teamId", value: scope.teamId } },
-                      { equals: { path: "projectId", value: scope.projectId } },
+                      { in: { path: "projectId", value: readableProjects(scope.projectId) } },
                       { equals: { path: "status", value: "active" } },
                     ],
                   },
@@ -50,7 +52,7 @@ export async function retrieve(c: Cols, scope: Scope, query: string, limit = 6):
       },
     },
     { $limit: limit },
-    { $project: { key: 1, kind: 1, text: 1, origin: 1, version: 1, score: { $meta: "score" }, details: { $meta: "scoreDetails" } } },
+    { $project: { key: 1, kind: 1, text: 1, origin: 1, version: 1, projectId: 1, score: { $meta: "score" }, details: { $meta: "scoreDetails" } } },
   ];
   const fused = await c.memories.aggregate<Fused>(pipeline).toArray();
   const out: Retrieved[] = fused.map(({ details, ...m }) => ({
@@ -58,14 +60,14 @@ export async function retrieve(c: Cols, scope: Scope, query: string, limit = 6):
     via: (details?.details ?? []).filter((d) => typeof d.rank === "number").map((d) => d.inputPipelineName),
   }));
 
-  // Explicit IDs ("R-12", "d 09") resolve exactly via the (teamId, projectId, key) index and rank first.
+  // Explicit IDs ("R-12", "d 09") resolve exactly (keys are unique per team) and rank first.
   const keys = [...new Set([...query.matchAll(/\b([a-z])[\s-]?(\d{1,3})\b/gi)].map((m) => `${m[1].toUpperCase()}-${m[2].padStart(2, "0")}`))];
   const exact = keys.length
-    ? await c.memories.find({ ...filter, key: { $in: keys } }, { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1 } }).toArray()
+    ? await c.memories.find({ ...filter, key: { $in: keys } }, { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1, projectId: 1 } }).toArray()
     : [];
   // Index-lag guard: include very recently promoted/corrected memories straight from the collection.
   const fresh = await c.memories
-    .find({ ...filter, updatedAt: { $gte: new Date(Date.now() - FRESH_MS) } }, { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1 } })
+    .find({ ...filter, updatedAt: { $gte: new Date(Date.now() - FRESH_MS) } }, { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1, projectId: 1 } })
     .limit(5).toArray();
   const direct: Retrieved[] = [];
   for (const [via, docs] of [["key", exact], ["fresh", fresh]] as const) {
@@ -80,7 +82,7 @@ export async function retrieve(c: Cols, scope: Scope, query: string, limit = 6):
         continue;
       }
       if (direct.some((r) => String(r._id) === String(m._id))) continue;
-      direct.push({ _id: m._id, key: m.key, kind: m.kind, text: m.text, origin: m.origin, version: m.version, score: 0, via: [via] });
+      direct.push({ _id: m._id, key: m.key, kind: m.kind, text: m.text, origin: m.origin, version: m.version, projectId: m.projectId, score: 0, via: [via] });
     }
   }
   const keyed = direct.filter((r) => r.via.includes("key"));

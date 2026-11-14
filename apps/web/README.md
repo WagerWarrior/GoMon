@@ -41,6 +41,21 @@ live demo: use `sim` for development only.
 Needs: unique index on `actions.idempotencyKey`. Promotion writes `lock.lockedAt`, `lock.participants`, `sourceRefs` so an Atlas
 validator that requires them for active decisions accepts it.
 
+## Projects, meetings, company context
+- **All projects.** Sessions, Mission control, Activity, Actions and Memory read every project of `TEAM_ID` (not only `PROJECT_ID`) and
+  label each call/memory with its project name (`lib/projects.ts`). Memory shows company context (`projectId: "company"`) and project
+  memories, filterable by project; Sessions filter with `?project=`.
+- **Per-call scope.** `/api/ask` and `/api/gov` act in the call's own project (`callScope(callId)` in `lib/db.ts`); retrieval reads the
+  project plus company context (`lib/scope.ts`, same rule as `apps/worker/src/scope.ts`). Lock keys are unique per team
+  (counter `${teamId}/${prefix}`), matching the worker.
+- **`/start`** (Start meeting): Meet URL, title, project, template, "Start as" → `POST /api/worker/meetings` (the worker checks
+  `start_meeting`, creates the call and sends the Recall bot), then opens the session's live tab. Lists meetings Gomon is in with "Remove Gomon"
+  (`POST /api/worker/meetings/:callId/leave`).
+- **`/projects`**: company context card, project cards (sessions, memories, last call, GitHub board link from `projects.github.url`),
+  "New project" → `POST /api/worker/projects` (policy `create_project`; the worker queues the GitHub board).
+- The `/api/worker/*` proxy forwards `WORKER_TOKEN` and, when present, the browser's `x-session-token`. Actions of `type: "github"`
+  render as op + target (`lib/actions.ts`).
+
 ## Not built / not measured
 Presence and live cursors (stretch). No latency numbers are claimed: the Timings panel shows only what the worker logs.
 

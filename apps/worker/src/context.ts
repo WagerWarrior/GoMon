@@ -4,6 +4,7 @@
  * cite; the agent verifies cited sources against this set before speaking.
  */
 import type { Ctx } from "./governance.ts";
+import { readableProjects } from "./scope.ts";
 
 export type WorkspaceSource = { id: string; line: string };
 export type Workspace = { header: string; sources: WorkspaceSource[] };
@@ -36,11 +37,12 @@ async function githubIssues(): Promise<WorkspaceSource[]> {
 }
 
 export async function workspaceFor(ctx: Ctx, callId: string): Promise<Workspace> {
-  const scope = { teamId: ctx.teamId, projectId: ctx.projectId };
+  // Previous calls and locks come from this project and company context (contract 1); counts likewise.
+  const scope = { teamId: ctx.teamId, projectId: { $in: readableProjects(ctx.projectId) } };
   const [call, previous, recentLocks, kinds, issues] = await Promise.all([
     ctx.c.calls.findOne({ _id: callId as never }, { projection: { title: 1, startedAt: 1 } }),
-    // Real conversations only: skip near-empty test calls.
-    ctx.c.calls.find({ ...scope, _id: { $ne: callId as never }, utteranceSeq: { $gte: 10 } }).sort({ startedAt: -1 }).limit(4).project({ title: 1, startedAt: 1, utteranceSeq: 1 }).toArray(),
+    // Real conversations only (skip near-empty test calls); seeded past meetings carry a summary instead.
+    ctx.c.calls.find({ ...scope, _id: { $ne: callId as never }, $or: [{ utteranceSeq: { $gte: 10 } }, { summary: { $type: "string" } }] }).sort({ startedAt: -1 }).limit(4).project({ title: 1, startedAt: 1, utteranceSeq: 1, summary: 1 }).toArray(),
     ctx.c.memories.find({ ...scope, status: "active", origin: "call" }).sort({ "lock.lockedAt": -1 }).limit(6).project({ key: 1, text: 1, sourceRefs: 1, lock: 1 }).toArray(),
     ctx.c.memories.aggregate<{ _id: string; n: number }>([{ $match: { ...scope, status: "active" } }, { $group: { _id: "$kind", n: { $sum: 1 } } }]).toArray(),
     githubIssues(),
@@ -55,7 +57,8 @@ export async function workspaceFor(ctx: Ctx, callId: string): Promise<Workspace>
   const calls: WorkspaceSource[] = previous.map((p) => {
     const id = String(p._id);
     const keys = recentLocks.filter((m) => callOf(m) === id).map((m) => String(m.key));
-    return { id: `call:${id}`, line: `previous call "${p.title ?? "untitled"}" (${day(p.startedAt)}, ${p.utteranceSeq} utterances)${keys.length ? `; locked ${keys.join(", ")}` : "; nothing locked"}` };
+    const summary = typeof p.summary === "string" ? ` Summary: ${p.summary.slice(0, 300)}` : "";
+    return { id: `call:${id}`, line: `previous call "${p.title ?? "untitled"}" (${day(p.startedAt)}${p.utteranceSeq ? `, ${p.utteranceSeq} utterances` : ""})${keys.length ? `; locked ${keys.join(", ")}` : ""}.${summary}` };
   });
   const locks: WorkspaceSource[] = recentLocks.map((m) => {
     const cid = callOf(m);

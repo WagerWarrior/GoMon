@@ -153,7 +153,10 @@ test("a worker that died mid-send is recovered: the stuck claim is re-queued and
 test("works under the spec's actions validator: 'sent' requires policyCheck.allowed and requestedBy", async () => {
   const { d, done } = await freshDb(); const gh = await fakeGithub();
   try {
-    await d.command({ collMod: "actions", validator: { $or: [{ status: { $nin: ["sent", "confirmed"] } }, { $and: [{ "policyCheck.allowed": true }, { requestedBy: { $type: "string" } }, { externalId: { $type: "string" } }] }] }, validationAction: "error" });
+    // Recreate the collection with the validator (collMod needs dbAdmin, which a readWrite Atlas test user lacks).
+    await d.collection("actions").drop();
+    await d.createCollection("actions", { validator: { $or: [{ status: { $nin: ["sent", "confirmed"] } }, { $and: [{ "policyCheck.allowed": true }, { requestedBy: { $type: "string" } }, { externalId: { $type: "string" } }] }] }, validationAction: "error" });
+    await d.collection("actions").createIndex({ idempotencyKey: 1 }, { unique: true });
     const id = await queue(d, "create_issue");
     assert.equal(await processAction(d, id, envFor(gh.url)), "sent");
     assert.ok(["sent", "confirmed"].includes((await get(d, id)).status));

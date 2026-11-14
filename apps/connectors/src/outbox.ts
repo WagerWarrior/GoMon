@@ -15,7 +15,8 @@ import * as slack from "./slack";
 import { Permanent, Retryable, type Action, type Env, type Sent } from "./types";
 
 export const MAX_ATTEMPTS = 5;
-const POLICY_FOR: Record<string, string> = { create_issue: "create_issue", post_slack: "post_slack" };
+/** Policy action per outbox action; a GitHub board is project creation, every other GitHub op is `github_write`. */
+const policyFor = (a: Action) => (a.type === "github" ? (a.payload?.op === "create_project" ? "create_project" : "github_write") : a.type);
 const chains = new Map<string, Promise<unknown>>();
 /** Serialize per call so a Slack thread root is only created once. */
 function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -33,7 +34,7 @@ export type Outcome = "sent" | "denied" | "failed" | "requeued" | "skipped";
 /** Action types this worker can actually send with its env. */
 export function configuredTypes(env: Env): Action["type"][] {
   const t: Action["type"][] = [];
-  if (env.GITHUB_TOKEN && env.GITHUB_REPO) t.push("create_issue");
+  if (env.GITHUB_TOKEN && env.GITHUB_REPO) t.push("create_issue", "github");
   if (env.SLACK_BOT_TOKEN && env.SLACK_CHANNEL_ID) t.push("post_slack");
   return t;
 }
@@ -47,7 +48,7 @@ export async function processAction(d: Db, id: any, env: Env): Promise<Outcome> 
   const a = await col.findOneAndUpdate({ _id: id, status: "queued", type: { $in: types } }, { $set: { status: "sending", updatedAt: new Date() }, $inc: { attempts: 1 } }, { returnDocument: "after" });
   if (!a) return "skipped";
 
-  const policy = await checkPolicy(d, a.teamId, a.projectId, a.requestedBy, POLICY_FOR[a.type] ?? a.type);
+  const policy = await checkPolicy(d, a.teamId, a.projectId, a.requestedBy, policyFor(a));
   if (!policy.allowed) {
     await col.updateOne({ _id: a._id }, { $set: { status: "denied", policyCheck: policy, updatedAt: new Date() } });
     await audit(d, a, "action_denied", policy.reason);
@@ -76,10 +77,8 @@ export async function processAction(d: Db, id: any, env: Env): Promise<Outcome> 
 }
 
 async function send(d: Db, a: Action, env: Env): Promise<Sent> {
-  if (a.type === "create_issue") {
-    if ((a.attempts ?? 1) > 1) { const prior = await github.findIssue(env, a.idempotencyKey); if (prior) return { ...prior, note: "adopted earlier attempt" }; }
-    return github.createIssue(env, a.payload, a.idempotencyKey);
-  }
+  if (a.type === "create_issue") return github.sendIssue(d, env, a);
+  if (a.type === "github") return github.sendGithub(d, env, a);
   if (a.type === "post_slack") {
     const calls = d.collection("calls");
     const call: any = a.callId ? await calls.findOne({ _id: a.callId as any }) : null;
@@ -104,6 +103,7 @@ async function confirm(d: Db, a: Action, sent: Sent, env: Env) {
   try {
     let seen = false;
     if (a.type === "create_issue") seen = await github.confirmIssue(env, sent.externalId, a.idempotencyKey);
+    else if (a.type === "github") seen = await github.confirmGithub(d, env, a, sent);
     else if (a.type === "post_slack") {
       const call: any = await d.collection("calls").findOne({ _id: a.callId as any });
       const hit = await slack.findMessage(env, a.idempotencyKey, call?.slackThreadTs);

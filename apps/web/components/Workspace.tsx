@@ -7,6 +7,7 @@ import { deriveGomonState, GOMON_STATES } from "@/lib/gomon/states";
 import { buildDiagram } from "@/lib/mermaid";
 import { stageStats } from "@/lib/stats";
 import type { ActionDoc, AuditEvent, CallDoc, CallItem, Conflict, Member, Memory, TimingDoc, Utterance } from "@/lib/types";
+import { describeAction } from "@/lib/actions";
 
 type Data = { calls: CallDoc[]; utterances: Utterance[]; call_items: CallItem[]; memories: Memory[]; conflicts: Conflict[]; actions: ActionDoc[]; audit_events: AuditEvent[]; timings: TimingDoc[]; members: Member[] };
 const EMPTY: Data = { calls: [], utterances: [], call_items: [], memories: [], conflicts: [], actions: [], audit_events: [], timings: [], members: [] };
@@ -149,7 +150,7 @@ export default function Workspace({ callId }: { callId: string }) {
             <span className="muted small">{lockedFromCall.length ? `${lockedFromCall.length} locked decision${lockedFromCall.length > 1 ? "s" : ""} from this call` : "Lock a decision first"} · requester: {actor || "—"}{role ? ` (${role})` : ""}</span></div>
           <table className="tbl"><thead><tr><th>Action</th><th>Status</th><th>Requested by</th><th>Policy</th><th>External</th></tr></thead>
             <tbody>{data.actions.length === 0 && <tr><td colSpan={5} className="muted">Nothing requested yet.</td></tr>}
-              {data.actions.map((a) => (<tr key={id(a)}><td>{a.type === "create_issue" ? "GitHub issue" : "Slack post"}<div className="muted small">{String((a.payload as any)?.title ?? (a.payload as any)?.text ?? "").slice(0, 70)}</div></td>
+              {data.actions.map((a) => (<tr key={id(a)}><td>{a.type === "post_slack" ? "Slack post" : a.type === "github" ? "GitHub" : "GitHub issue"}<div className="muted small">{describeAction(a).slice(0, 70)}</div></td>
                 <td><span className={`pill ${a.status === "sent" || a.status === "confirmed" ? "good" : a.status === "denied" || a.status === "failed" ? "bad" : "warn"}`}>{a.status}</span>{a.error ? <div className="muted small">{a.error}</div> : null}</td>
                 <td>{a.requestedBy}</td>
                 <td>{a.policyCheck ? <span className={a.policyCheck.allowed ? "ok" : "badtxt"}>{a.policyCheck.allowed ? "allowed" : "denied"}</span> : <span className="muted">pending</span>}<div className="muted small">{a.policyCheck?.reason}</div></td>

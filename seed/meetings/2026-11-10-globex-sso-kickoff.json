@@ -1,0 +1,32 @@
+{
+  "id": "seed-2026-11-10-globex-sso-kickoff",
+  "title": "Globex SSO kickoff",
+  "projectId": "enterprise-sso",
+  "startedAt": "2026-11-10T17:00:00Z",
+  "summary": "Kickoff for Globex SSO (R-01, R-05, R-06). To hit the Q1 deadline with one identity engineer (K-03), the team locked D-16: buy SAML and SCIM through WorkOS instead of building it, R-16: SCIM deprovisioning also revokes every API key the user created, and T-03: Lena runs a WorkOS spike against Globex's Okta sandbox. EU residency (Q-03) stays open.",
+  "utterances": [
+    ["Rob", "Globex renewal is in March and SSO is the condition. SAML plus SCIM, live by end of Q1. Lena, you're leading."],
+    ["Lena", "Honestly, building SAML ourselves is two to three months for me alone, and SCIM on top. That's the whole quarter."],
+    ["Max", "What about WorkOS or Auth0? Both do SAML and SCIM as a service."],
+    ["Lena", "WorkOS fits better, it handles Okta and Entra and gives us SCIM webhooks. Rough estimate is three weeks of integration."],
+    ["Tamir", "What does it cost?"],
+    ["Rob", "About 125 dollars per connection per month. Against an 800k renewal that is noise."],
+    ["Priya", "My worry is lock-in on login."],
+    ["Lena", "We keep our own user and session model. WorkOS only does the IdP handshake and directory sync, so we can swap it later."],
+    ["Rob", "Okay. Proposal: we buy SAML and SCIM through WorkOS, we don't build it."],
+    ["Priya", "With that boundary, agreed."],
+    ["Max", "Agreed."],
+    ["Marcus", "One security thing: when someone is deprovisioned, their API keys keep working today."],
+    ["Lena", "Good catch. SCIM deprovisioning has to revoke every API key that user created, not just the dashboard login."],
+    ["Rob", "Lock that as a requirement."],
+    ["Max", "Agreed."],
+    ["Tamir", "And EU residency? Globex wants that too."],
+    ["Rob", "Separate problem, still open. Lena, first a WorkOS spike against Globex's Okta sandbox this week."],
+    ["Lena", "I'll have a working SP-initiated login by Friday."]
+  ],
+  "locks": [
+    { "key": "D-16", "kind": "decision", "text": "Buy SAML 2.0 and SCIM 2.0 through WorkOS instead of building them; Northwind keeps its own user and session model so the provider stays replaceable.", "utterances": [1, 2, 3, 5, 7, 8, 9, 10], "lockedBy": "Rob" },
+    { "key": "R-16", "kind": "requirement", "text": "SCIM deprovisioning must revoke every API key the removed user created, not only their dashboard login.", "utterances": [11, 12, 13, 14], "lockedBy": "Rob" },
+    { "key": "T-03", "kind": "action", "text": "Lena runs a WorkOS spike against Globex's Okta sandbox and demos a working SP-initiated SAML login by Friday, November 13.", "utterances": [16, 17], "lockedBy": "Rob" }
+  ]
+}

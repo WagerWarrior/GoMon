@@ -10,7 +10,7 @@ export interface Step { key: string; label: string; state: StepState; detail?: s
 export interface Run { id: string; title: string; key?: string; callId?: string; at: string; steps: Step[] }
 
 /** Action types the connectors know, and a readable name for each. Unknown types still show, title-cased. */
-export const TOOL_NAMES: Record<string, string> = { post_slack: "Slack", create_issue: "GitHub", create_ticket: "Linear", send_email: "Email", post_notion: "Notion" };
+export const TOOL_NAMES: Record<string, string> = { post_slack: "Slack", create_issue: "GitHub", github: "GitHub", create_ticket: "Linear", send_email: "Email", post_notion: "Notion" };
 export const toolName = (t: string) => TOOL_NAMES[t] ?? t.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
 const slackUrl = (id?: string) => { const [ch, ts] = String(id ?? "").split(":"); return ch && ts ? `https://slack.com/archives/${ch}/p${ts.replace(".", "")}` : null; };

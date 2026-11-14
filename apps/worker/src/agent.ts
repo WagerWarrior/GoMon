@@ -11,6 +11,8 @@ import { SPEAKING, templateFor } from "./templates.ts";
 import { postToMeetingChat, resolveLink } from "./links.ts";
 import { workspaceFor, type Workspace } from "./context.ts";
 import { maybeRefreshSummary } from "./summary.ts";
+import { memoryFilter } from "./scope.ts";
+import { handleGithubIntent } from "./github-intent.ts";
 
 export type Stored = Utterance & { _id: ObjectId };
 
@@ -22,6 +24,9 @@ const ACK_DELAY_MS = 1500;
 const NO_ANSWER = "I don't have anything on that yet.";
 /** "drop the link", "send me the GitHub issue": a sharing verb plus a link-ish noun. "what's the latest issue" is a question, not this. */
 const LINK_REQUEST = /\b(send|drop|share|post|paste|put|give|open)\b.*\b(link|url|github|issue|ticket|repo|repository|pull request|pr)\b|\b(link|url)\b/i;
+/** A wake line asking for a GitHub change ("make an issue…", "close issue 12") is never a link request. */
+const GITHUB_CHANGE = /\b(make|create|file|assign|unassign|close|reopen|comment|label|milestone|start|board)\b/i;
+const shortDate = (d: unknown) => (d instanceof Date ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "");
 
 /** Live agent state on the call document (listening | thinking | searching | answering), for the bot tile and the workspace. */
 async function setState(ctx: Ctx, callId: string, state: "listening" | "thinking" | "searching" | "answering", detail: string): Promise<void> {
@@ -60,10 +65,21 @@ async function resolveMemory(ctx: Ctx, ref: string, memories: Retrieved[]): Prom
   if (hit) return hit;
   const id = oid(ref);
   const doc = await ctx.c.memories.findOne(
-    { teamId: ctx.teamId, projectId: ctx.projectId, status: "active", ...(id ? { _id: id } : { key: ref.toUpperCase() }) },
+    { ...memoryFilter(ctx), ...(id ? { _id: id } : { key: ref.toUpperCase() }) },
     { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1 } },
   );
   return doc?._id ? { _id: doc._id, key: doc.key, kind: doc.kind, text: doc.text, origin: doc.origin, version: doc.version, score: 0, via: ["ref"] } : null;
+}
+
+/** memoryId -> "Meeting title, Nov 6" for call-origin memories, so the model can say which meeting decided what. */
+async function meetingOrigins(ctx: Ctx, memories: Retrieved[]): Promise<Map<string, string>> {
+  const ids = memories.filter((m) => m.origin === "call").map((m) => m._id);
+  if (!ids.length) return new Map();
+  const docs = await ctx.c.memories.find({ _id: { $in: ids } }, { projection: { sourceRefs: 1 } }).toArray();
+  const callOf = new Map(docs.map((d) => [String(d._id), d.sourceRefs.find((r) => r.type === "call")?.callId]));
+  const calls = await ctx.c.calls.find({ _id: { $in: [...new Set(callOf.values())].filter(Boolean) as never[] } }, { projection: { title: 1, startedAt: 1 } }).toArray();
+  const label = new Map(calls.map((c) => [String(c._id), [c.title, shortDate(c.startedAt)].filter(Boolean).join(", ")]));
+  return new Map([...callOf].flatMap(([m, c]) => (c && label.get(c) ? [[m, label.get(c)!] as [string, string]] : [])));
 }
 
 /**
@@ -77,10 +93,11 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   const first = batch[0];
   const call = await ctx.c.calls.findOne({ _id: u.callId as never });
   const memoryEnabled = call?.memoryEnabled !== false;
-  // The call's agent template decides persona, captured kinds, speaking budget, consensus mode, veto window and voice.
+  // The call's project scopes memory (reads project + company, writes project); the template decides persona, captured kinds,
+  // speaking budget, consensus mode, veto window and voice.
   const tpl = await templateFor(ctx.c, ctx.teamId, call?.templateId);
   const rules = SPEAKING[tpl.proactivity];
-  ctx = { ...ctx, voiceId: tpl.voiceId };
+  ctx = { ...ctx, projectId: typeof call?.projectId === "string" ? call.projectId : ctx.projectId, voiceId: tpl.voiceId };
 
   const [recentDesc, open] = await Promise.all([
     ctx.c.utterances.find({ callId: u.callId, seq: { $lt: first.seq } }).sort({ seq: -1 }).limit(RECENT_TURNS).toArray(),
@@ -110,6 +127,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       memoryEnabled ? retrieve(ctx.c, ctx, query) : Promise.resolve([]),
       wakes.length ? workspaceFor(ctx, u.callId) : Promise.resolve(null),
     ]);
+    const origins = await meetingOrigins(ctx, memories);
     retrieveMs = Date.now() - tR;
 
     const tA = Date.now();
@@ -117,10 +135,14 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       recentDesc.reverse().map((r) => ({ id: String(r._id), speaker: r.speaker.displayName, text: r.text })),
       batch.map((b) => ({ id: String(b._id), speaker: b.speaker.displayName, text: b.text })),
       open.map((i) => ({ id: String(i._id), kind: i.kind, text: i.text, status: i.status })),
-      memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text })),
+      memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text, from: origins.get(String(m._id)) })),
       wakes.map((x) => ({ id: String(x.b._id), heardAs: x.w.heardAs ?? "" })),
       { persona: tpl.persona, captureKinds: tpl.captureKinds },
-      { workspace, callSummary: typeof call?.summary === "string" ? call.summary : "" },
+      {
+        workspace,
+        callSummary: typeof call?.summary === "string" ? call.summary : "",
+        today: new Date().toISOString().slice(0, 10) + ` (${new Date().toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" })})`,
+      },
     );
     analyzeMs = Date.now() - tA;
   } finally {
@@ -131,7 +153,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   // Link requests are actions, not questions: if someone addressed Gomon and asked for a link, run share_link even when the
   // model chose to answer in words. A spoken key ("d 15") becomes the memory to look up.
   const lastWake = wakes[wakes.length - 1];
-  if (lastWake && a.command.type === "none" && LINK_REQUEST.test(lastWake.w.rest)) {
+  if (lastWake && a.command.type === "none" && a.github.op === "none" && LINK_REQUEST.test(lastWake.w.rest) && !GITHUB_CHANGE.test(lastWake.w.rest)) {
     const key = /\b([a-z])[\s-]?(\d{1,3})\b/i.exec(lastWake.w.rest);
     a.command = { type: "share_link", memoryId: key ? `${key[1].toUpperCase()}-${key[2].padStart(2, "0")}` : "", itemRef: "", newText: "", query: lastWake.w.rest };
   }
@@ -216,7 +238,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       const type = cmd.type === "create_tickets" ? "create_issue" : "post_slack";
       const r = await enqueueForCall(ctx, type, u.callId, speaker);
       const what = type === "create_issue" ? (r.queued > 1 ? `${r.queued} GitHub issues` : "the GitHub issue") : "the Slack update";
-      await say(ctx, u.callId, r.queued ? `On it, filing ${what} now.` : r.existing ? `Already done, those went out earlier.` : `Nothing's locked on this call yet, so there's nothing to file.`, "command", "normal", u._id);
+      const who = r.assigned.length ? `, assigned to ${r.assigned.map((n) => n.split(" ")[0]).join(" and ")}` : "";
+      await say(ctx, u.callId, r.queued ? `On it, filing ${what} now${who}.` : r.existing ? `Already done, those went out earlier.` : `Nothing's locked on this call yet, so there's nothing to file.`, "command", "normal", u._id);
     } else if (cmd.type === "correct_memory") {
       const id = (await resolveMemory(ctx, cmd.memoryId, memories))?._id;
       const mem = id && cmd.newText ? await correctMemory(ctx, id, cmd.newText, speaker, u.callId) : null;
@@ -234,6 +257,12 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
         await say(ctx, u.callId, posted ? "Dropped the link in the chat." : "I put the link in the workspace, the meeting chat didn't take it.", "command", "normal", u._id);
       }
     }
+    // A GitHub request may come alone or alongside a command ("lock it in and put it on the board" is two asks). External
+    // effects need Gomon to have been addressed, never an overheard "close issue 12".
+    if (a.github.op !== "none" && a.addressed) {
+      const line = await handleGithubIntent(ctx, u.callId, u._id, speaker, a.github, (ref) => resolveMemory(ctx, ref, memories));
+      if (line) await say(ctx, u.callId, line, "command", "normal", u._id);
+    }
   } catch (e) {
     if (!(e instanceof PolicyDenied)) throw e;
     await say(ctx, u.callId, `Sorry ${speaker.split(" ")[0]}, I can't do that: ${e.result.reason}.`, "command", "normal", u._id);
@@ -241,8 +270,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
 
   // 6. Direct answer when addressed (skip if a command already produced the response). Grounding is enforced, not just asked:
   //    a grounded reply is spoken only if it cites at least one source that was actually in its context, and every memory key it
-  //    says out loud exists. Conversational replies (about the call itself) need no source.
-  if (a.addressed && a.command.type === "none" && a.reply.trim()) {
+  //    says out loud exists. Conversational replies (about the call itself) need no source. GitHub changes acknowledge themselves.
+  if (a.addressed && a.command.type === "none" && a.github.op === "none" && a.reply.trim()) {
     let text = a.reply.trim();
     if (a.replyKind === "grounded") {
       const norm = (s: string) => s.trim().toUpperCase();
@@ -253,7 +282,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       const spokenKeys = [...text.matchAll(/\b([A-Z])-(\d{2,3})\b/g)].map((m) => m[0]);
       const askKeys = [...new Set([...a.sources.map(norm).filter(keyLike), ...spokenKeys])].filter((k) => !known.has(k));
       const activeKeys = askKeys.length
-        ? new Set((await ctx.c.memories.find({ teamId: ctx.teamId, projectId: ctx.projectId, status: "active", key: { $in: askKeys } }).project({ key: 1 }).toArray()).map((m) => String(m.key)))
+        ? new Set((await ctx.c.memories.find({ ...memoryFilter(ctx), key: { $in: askKeys } }).project({ key: 1 }).toArray()).map((m) => String(m.key)))
         : new Set<string>();
       const verified = a.sources.map(norm).filter((s) => known.has(s) || activeKeys.has(s));
       const badKey = spokenKeys.some((k) => !known.has(k) && !activeKeys.has(k));
@@ -298,14 +327,16 @@ export function handleBatch(ctx: Ctx, batch: Stored[]): Promise<void> {
 
 /** Promote items whose veto window elapsed. Runs on a timer, so a worker restart never strands a lock. */
 export async function sweepLocks(ctx: Ctx): Promise<void> {
-  const due = await ctx.c.callItems.find({ teamId: ctx.teamId, projectId: ctx.projectId, status: "locking" }).toArray();
+  const due = await ctx.c.callItems.find({ teamId: ctx.teamId, status: "locking" }).toArray();
   for (const it of due) {
     if (!it._id || !it.lockAnnouncedAt || it.lockAnnouncedAt.getTime() + (it.vetoMs ?? config.vetoMs) > Date.now()) continue;
     const actor = it.agreedBy?.[0] ?? "unknown";
     const call = await ctx.c.calls.findOne({ _id: it.callId as never }, { projection: { templateId: 1 } });
-    const voiced: Ctx = { ...ctx, voiceId: (await templateFor(ctx.c, ctx.teamId, call?.templateId)).voiceId };
+    // The item's own project: a lock in project P becomes P's memory whatever project this worker was started with.
+    const scoped: Ctx = { ...ctx, projectId: it.projectId };
+    const voiced: Ctx = { ...scoped, voiceId: (await templateFor(ctx.c, ctx.teamId, call?.templateId)).voiceId };
     try {
-      const mem = await promoteItem(ctx, it._id, actor, "consensus");
+      const mem = await promoteItem(scoped, it._id, actor, "consensus");
       if (mem) await notify(voiced, it.callId, `locked ${mem.key}: ${it.text}`, "lock_done");
     } catch (e) {
       if (!(e instanceof PolicyDenied)) throw e;

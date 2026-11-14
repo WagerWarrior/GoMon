@@ -1,5 +1,5 @@
 export type Action = {
-  _id: any; callId?: string; teamId: string; projectId: string; type: "create_issue" | "post_slack";
+  _id: any; callId?: string; teamId: string; projectId: string; type: "create_issue" | "post_slack" | "github";
   payload: Record<string, any>; requestedBy: string; status: string; idempotencyKey: string; attempts?: number;
   externalId?: string; externalUrl?: string; nextAttemptAt?: Date; updatedAt?: Date;
 };

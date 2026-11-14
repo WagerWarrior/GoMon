@@ -31,15 +31,15 @@ const oid = (id: string) => new ObjectId(id);
 
 type Ctx = { c: MongoClient; d: Db; teamId: string; projectId: string };
 
-/** Same key scheme as apps/worker (Rob): one counter per team/project/prefix, continuing after seeded keys. */
+/** Same key scheme as apps/worker (Rob): one counter per team/prefix (keys are unique across projects), continuing after seeded keys. */
 const PREFIX: Record<string, string> = { decision: "D", requirement: "R", constraint: "C", risk: "K", open_question: "Q", action: "T", assumption: "A", interface: "I", alternative: "L" };
 async function nextKey(ctx: Ctx, kind: string, session: ClientSession): Promise<string | undefined> {
   const p = PREFIX[kind]; if (!p) return undefined;
-  const id = `${ctx.teamId}/${ctx.projectId}/${p}`;
+  const id = `${ctx.teamId}/${p}`;
   const counters = ctx.d.collection<{ _id: string; n: number }>("counters");
   let row = await counters.findOneAndUpdate({ _id: id }, { $inc: { n: 1 } }, { session, returnDocument: "after" });
   if (!row) {
-    const existing = await ctx.d.collection("memories").find({ teamId: ctx.teamId, projectId: ctx.projectId, key: { $regex: `^${p}-\\d+$` } }, { session, projection: { key: 1 } }).toArray();
+    const existing = await ctx.d.collection("memories").find({ teamId: ctx.teamId, key: { $regex: `^${p}-\\d+$` } }, { session, projection: { key: 1 } }).toArray();
     const max = existing.reduce((m, d) => Math.max(m, Number(String(d.key).split("-")[1] ?? 0)), 0);
     row = await counters.findOneAndUpdate({ _id: id }, { $setOnInsert: { n: max + 1 } }, { session, upsert: true, returnDocument: "after" });
   }

@@ -1,13 +1,26 @@
 import { traceable } from "langsmith/traceable";
 import { config } from "./config.ts";
-import { ITEM_KINDS, type ItemKind } from "./shapes.ts";
+import { GITHUB_OPS, ITEM_KINDS, type GithubOp, type ItemKind } from "./shapes.ts";
 import type { Workspace } from "./context.ts";
 
 export type TurnLine = { id: string; speaker: string; text: string };
 export type OpenItem = { id: string; kind: ItemKind; text: string; status: string };
-export type MemoryLine = { id: string; key?: string; kind: string; text: string };
+/** `from`: the meeting a call-origin memory was locked in ("Acme pricing sync, Nov 6"). */
+export type MemoryLine = { id: string; key?: string; kind: string; text: string; from?: string };
 
 export type CommandType = "none" | "lock_item" | "create_tickets" | "post_slack" | "correct_memory" | "forget_memory" | "share_link";
+
+/**
+ * A spoken GitHub request, as heard: people are NAMES (resolved to logins by the worker, never by the model), issue refs are
+ * as spoken ("15", "R-21", "" = the one just discussed), projects are Gomon project names. Unused fields are "" / [].
+ */
+export type GithubIntent = {
+  op: "none" | GithubOp;
+  memoryId: string; issue: string; title: string; body: string;
+  assignees: string[]; unassign: string[]; labels: string[];
+  state: "" | "open" | "closed"; stateReason: "" | "completed" | "not_planned";
+  comment: string; project: string; milestone: string; dueOn: string;
+};
 
 /** One structured result per committed utterance: everything the loop needs, in a single fast model call. */
 export type Analysis = {
@@ -22,14 +35,16 @@ export type Analysis = {
   agreement: { itemRefs: string[]; agreedBy: string[] };
   objection: boolean;
   command: { type: CommandType; memoryId: string; itemRef: string; newText: string; query: string };
+  github: GithubIntent;
   suggestion: string;
 };
 
 const str = { type: "string" };
+const strs = { type: "array", items: str };
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["addressed", "replyKind", "reply", "sources", "newItems", "conflicts", "agreement", "objection", "command", "suggestion"],
+  required: ["addressed", "replyKind", "reply", "sources", "newItems", "conflicts", "agreement", "objection", "command", "github", "suggestion"],
   properties: {
     addressed: { type: "boolean" },
     replyKind: { type: "string", enum: ["none", "conversational", "grounded", "no_answer"] },
@@ -51,6 +66,16 @@ const SCHEMA = {
     command: {
       type: "object", additionalProperties: false, required: ["type", "memoryId", "itemRef", "newText", "query"],
       properties: { type: { type: "string", enum: ["none", "lock_item", "create_tickets", "post_slack", "correct_memory", "forget_memory", "share_link"] }, memoryId: str, itemRef: str, newText: str, query: str },
+    },
+    github: {
+      type: "object", additionalProperties: false,
+      required: ["op", "memoryId", "issue", "title", "body", "assignees", "unassign", "labels", "state", "stateReason", "comment", "project", "milestone", "dueOn"],
+      properties: {
+        op: { type: "string", enum: ["none", ...GITHUB_OPS] }, memoryId: str, issue: str, title: str, body: str,
+        assignees: strs, unassign: strs, labels: strs,
+        state: { type: "string", enum: ["", "open", "closed"] }, stateReason: { type: "string", enum: ["", "completed", "not_planned"] },
+        comment: str, project: str, milestone: str, dueOn: str,
+      },
     },
     suggestion: str,
   },
@@ -78,7 +103,8 @@ Rules:
   "what have we covered"): answer naturally from RECENT TURNS and THIS CALL; sources [].
   replyKind "grounded" for anything about the team, the design, past calls, GitHub, or the database: use only MEMORIES, OPEN CALL
   ITEMS and WORKSPACE, put every id you relied on in sources (memory key, "#<n>", "call:<id>", "atlas", or item id), and name the
-  key, issue number or call title naturally once. Never answer from general knowledge.
+  key, issue number or call title naturally once. A memory's "from" tells which meeting decided it, so "what did we decide with
+  Acme last week?" cites those keys. Never answer from general knowledge.
   replyKind "no_answer" if none of that covers it: say so in your own words in one short sentence, e.g. "I don't have anything on
   that yet." Never offer to log it.
 - newItems: high-level design content stated in the NEW utterances (decision proposals, requirements, constraints, risks, open questions,
@@ -99,18 +125,31 @@ Rules:
   full corrected memory text); "forget that" -> forget_memory (memoryId); "send/drop/share/post the link to X", "open the repo"
   -> share_link (memoryId if X is a memory, query = what they want a link to). Questions about issues, PRs or the repo ("what's the
   latest issue?") are replies grounded in WORKSPACE, not share_link. Otherwise type "none" with
-  empty fields. Unused fields are "".
+  empty fields. Unused fields are "". "create the tickets" (all decisions locked on this call) is create_tickets, NOT github.
+- github: only when someone addressing you asks for a specific GitHub change; else op "none" with ""/[] fields. One op:
+  create_issue ("make an issue for X", "file R-21 as a ticket"): memoryId = the memory key it is about if any, else title (max 70
+  chars) + body (1-2 sentences from the conversation); assignees, labels, project (a board/project NAME as spoken), milestone.
+  update_issue ("assign issue 15 to Tamir", "close 12, it's a duplicate", "comment on 15 that X", "label 9 enterprise"): issue = the
+  number as digits ("fifteen"/"one five" -> "15") or a memory key ("the R-21 ticket" -> "R-21"), "" for the issue just discussed;
+  assignees to add, unassign, labels to add, state, stateReason (duplicate/won't do -> not_planned, done -> completed), comment (the
+  text to post, cleaned up; for a duplicate close write a short comment saying so), title only if renaming.
+  add_to_project ("put 15 on the Enterprise SSO board"): issue + project. create_project ("start a new project called Usage
+  billing"): project = its name, body = a one-line description if given. create_milestone ("milestone Beta for December 1"):
+  milestone = title, dueOn = YYYY-MM-DD (next such date after TODAY) or "". People are names exactly as spoken ("Max", "me");
+  never invent GitHub usernames. Labels lowercase, as spoken ("customer", "enterprise"). When github is set, reply is "" (the
+  worker acknowledges the action itself).
 - suggestion: only a strong, specific alternative design (max 30 words) that the memories support and nobody has raised; almost always empty.`;
 }
 
 function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], extra: CallContext): string {
   const fmt = (l: TurnLine) => `[${l.id}] ${l.speaker}: ${l.text}`;
-  const { workspace, callSummary } = extra;
+  const { workspace, callSummary, today } = extra;
   return [
+    `TODAY: ${today}`,
     ...(workspace ? ["THIS CALL:", workspace.header, "", "WORKSPACE (previous calls, GitHub, database):", ...workspace.sources.map((s) => `- id=${s.id} ${s.line}`), ""] : []),
     ...(callSummary ? ["CALL SO FAR (rolling summary of earlier turns in this call):", callSummary, ""] : []),
     "MEMORIES (canonical team memory, retrieved for these utterances):",
-    memories.length ? memories.map((m) => `- id=${m.id} key=${m.key ?? "-"} kind=${m.kind}: ${m.text}`).join("\n") : "(none)",
+    memories.length ? memories.map((m) => `- id=${m.id} key=${m.key ?? "-"} kind=${m.kind}${m.from ? ` from="${m.from}"` : ""}: ${m.text}`).join("\n") : "(none)",
     "",
     "OPEN CALL ITEMS:",
     items.length ? items.map((i) => `- id=${i.id} [${i.status}] ${i.kind}: ${i.text}`).join("\n") : "(none)",
@@ -127,8 +166,9 @@ function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories
 type MessagesResponse = { content?: { type: string; text?: string }[]; stop_reason?: string; error?: { message: string }; usage?: unknown };
 
 export type TemplateHints = { persona: string; captureKinds: readonly string[] };
-/** Context beyond the turn window: workspace (only when addressed) and the rolling call summary (`calls.summary`). */
-export type CallContext = { workspace: Workspace | null; callSummary: string };
+/** Context beyond the turn window: workspace (only when addressed), the rolling call summary (`calls.summary`), and today's
+ *  date (for "last week" and milestone due dates). */
+export type CallContext = { workspace: Workspace | null; callSummary: string; today: string };
 
 export const analyze = traceable(
   async (recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], tpl: TemplateHints, extra: CallContext): Promise<Analysis> => {

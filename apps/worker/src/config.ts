@@ -25,6 +25,16 @@ export const config = {
   /** Do not repeat the same conflict out loud within this window. */
   conflictRepeatMs: Number(process.env.CONFLICT_REPEAT_MS || 3 * 60_000),
   agentName: process.env.AGENT_NAME || "Gomon",
+  /** Recall.ai bot dispatch for POST /api/meetings; same env as apps/bot-page/scripts/create-bot.js. */
+  recall: {
+    apiKey: process.env.RECALL_API_KEY || "",
+    region: process.env.RECALL_REGION || "us-west-2",
+    /** Public https URL of the bot page (tunnel): Recall posts transcripts there and renders it as the bot's camera. */
+    publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+    webhookToken: process.env.RECALL_WEBHOOK_TOKEN || "",
+    webhookSecret: process.env.RECALL_WEBHOOK_SECRET || "",
+    botVariant: process.env.RECALL_BOT_VARIANT || "web_4_core",
+  },
 };
 
 export const INDEX = { vector: "memories_auto", text: "memories_text" } as const;

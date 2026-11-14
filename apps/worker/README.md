@@ -7,7 +7,7 @@ audit / timings out. The web workspace and the bot page read the same collection
 ```bash
 cd apps/worker && npm install
 npm run setup               # collections + validators, TTL/unique indexes, memories_auto (Automated Embedding) + memories_text
-npm run seed                # synthetic Northwind team, members/roles, policies, design-doc memories; `-- --reset` wipes call data
+npm run seed                # synthetic Northwind scenario (below); `-- --reset` wipes all call data, memories, outbox, audit, counters
 npm run verify              # live checks: hybrid retrieval, exact IDs, cross-team isolation, validator, TTL
 npm start                   # worker on :3001 (VOICE_OUT=recall npm start: the worker speaks into meetings itself)
 npm run join -- <meet_url> [callId] [title]       # send Gomon to a meeting (Recall bot, transcript webhook via PUBLIC_BASE_URL, voice via Output Audio)
@@ -15,6 +15,11 @@ npm run say -- <callId> "<speaker>" "<text>"     # typed utterance (source "type
 npm run inspect -- <callId>                       # dump what Gomon wrote for a call
 ```
 Reads the repo-root `.env` (`MONGODB_URI`, `LLM_API_KEY`, `TEAM_ID`, `PROJECT_ID`; see `.env.example`).
+
+Seed data (all `synthetic: true`): `seed/company/*.md` → projectId `company` (customers, production, policies, team; read by
+every project), `seed/projects/<projectId>/*.md` → that project, `seed/meetings/*.json` → ended calls with utterances, promoted
+items, locked `origin: "call"` memories and `memory_locked` audit rows. Keys are unique per team; `counters` (`<teamId>/<prefix>`)
+start after the highest seeded key. Projects: `company`, `public-api-launch`, `enterprise-sso`. Policies carry no projectId.
 
 ## Contracts
 
@@ -24,7 +29,8 @@ Reads the repo-root `.env` (`MONGODB_URI`, `LLM_API_KEY`, `TEAM_ID`, `PROJECT_ID
   `speaker.displayName` must match a `members` row for policy-gated commands (seeded: Rob/Robert Reder, Max/Max Naidenov, Tamir/Tamir Azbel).
 - `GET /api/says/stream?callId=` SSE, `event: say` `{ sayId, text, priority: "high"|"normal", reason, createdAt }`. Replays queued says on connect.
 - `POST /api/says/:sayId/ack` `{ status: "started"|"done"|"failed"|"cancelled" }`.
-- `POST /api/calls` `{ callId?, title?, meetingUrl? }` → `{ callId }`. Calls are also created on the first utterance.
+- `POST /api/calls` `{ callId?, title?, meetingUrl?, projectId? }` → `{ callId, projectId }`. Calls are also created on the first utterance
+  (in `PROJECT_ID`). `projectId` must be an active working project of the team (not `company`), else 400.
 - Optional auth: set `WORKER_TOKEN`; send `Authorization: Bearer …` (or `?token=` on the SSE URL).
 
 **Max (workspace / connectors):** shapes follow `apps/web/README.md`. Worker additions:
@@ -37,6 +43,22 @@ Reads the repo-root `.env` (`MONGODB_URI`, `LLM_API_KEY`, `TEAM_ID`, `PROJECT_ID
 - Outbox idempotency key: `${type}:${callId}:${memoryId}:v${version}` (Max's proposed format, `type` = `create_issue|post_slack`),
   so voice and UI can never file the same decision version twice.
 - Policy actions used: `lock_decision`, `correct_memory`, `forget_memory` (leads only), `create_issue`, `post_slack`.
+
+## Projects and meetings
+- **Per-call project.** Every call has `projectId`; the worker processes each call in that project (`ctx.projectId = call.projectId`,
+  fallback `PROJECT_ID`): utterances, call items, says, locks and memory writes land in the call's project. Retrieval reads the
+  project plus company context (`projectId: "company"`, see `src/scope.ts`). One change stream per team (`worker-utterances:<teamId>`).
+- `GET /api/projects` → the team's active projects (company context flagged `company: true`) with `memories` (active) and `calls` counts.
+- `POST /api/projects` `{ name, description?, actor? }` → `createProjectWithBoard` (policy `create_project`, `project_created` audit,
+  GitHub Projects board queued as a `github`/`create_project` action when GitHub is configured). 201, 409 if the name exists, 403 on denial.
+- `POST /api/meetings` `{ meetingUrl, title?, projectId?, templateId?, actor? }` → `{ callId, botId, projectId }`. Policy `start_meeting`
+  for the requester (signed-in user's member name via `x-session-token`, else `actor`); creates the call (`meetingUrl`, `projectId`,
+  `ownerUserId`, `requestedBy`) first, then dispatches the Recall bot exactly like `apps/bot-page/scripts/create-bot.js` (`src/recall.ts`)
+  and stores `botId`. Audit `meeting_started`; a failed dispatch marks the call `failed` (502, audit `meeting_failed`).
+  Needs `RECALL_API_KEY`, `PUBLIC_BASE_URL` (bot page, https), optional `RECALL_REGION`, `RECALL_WEBHOOK_SECRET`/`RECALL_WEBHOOK_TOKEN`,
+  `RECALL_BOT_VARIANT`; 503 when Recall is not configured.
+- `POST /api/meetings/:callId/leave` `{ actor? }` → bot `leave_call`, call `status: "ended"`, audit `meeting_ended` (a Recall error is
+  returned as `recallError`; the call still ends).
 
 ## Agent templates (`agent_templates`, `calls.templateId`)
 A template decides how Gomon behaves on a call; the worker reloads it every batch (5 s cache), so switching mid-call works.

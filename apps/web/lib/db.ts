@@ -8,6 +8,13 @@ try { process.loadEnvFile(`${process.cwd()}/../../.env`); } catch {}
 export function uri() { return process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true"; }
 export function dbName() { return process.env.MONGODB_DB || "gomon"; }
 export function scope() { return { teamId: process.env.TEAM_ID || "northwind-platform", projectId: process.env.PROJECT_ID || "public-api-launch" }; }
+/** A call's scope: its own project (calls.projectId); calls without one, or no call, fall back to PROJECT_ID. */
+export async function callScope(callId?: string) {
+  const sc = scope();
+  if (!callId) return sc;
+  const call = await (await db()).collection<{ _id: string; teamId: string; projectId?: string }>("calls").findOne({ _id: callId, teamId: sc.teamId }, { projection: { projectId: 1 } });
+  return { ...sc, projectId: typeof call?.projectId === "string" ? call.projectId : sc.projectId };
+}
 
 export async function client(): Promise<MongoClient> {
   if (!g.__gomonClient) g.__gomonClient = new MongoClient(uri(), { retryWrites: true, minPoolSize: 12, maxIdleTimeMS: 0 });

@@ -1,0 +1,28 @@
+{
+  "id": "seed-2026-11-05-acme-escalation",
+  "title": "Acme escalation: nightly sync throttled",
+  "projectId": "public-api-launch",
+  "startedAt": "2026-11-05T14:30:00Z",
+  "summary": "Acme's nightly sync in the beta got 429s at about 1,100 requests per second even though D-12 allows a 3,000/s burst: each Envoy node kept its own local bucket, splitting the limit across nodes. Locked D-15: rate-limit buckets live only in the shared gateway Redis cluster, never per node, and T-02: Priya replays Acme's sync at 3,000/s in staging before launch and Rob confirms with Acme.",
+  "utterances": [
+    ["Rob", "Acme's CTO emailed me at 6am. Their nightly sync on the beta got hammered with 429s."],
+    ["Priya", "I looked. They were throttled at roughly 1,100 requests per second, well under the burst we agreed in D-12."],
+    ["Max", "So the bucket config is wrong?"],
+    ["Priya", "Config is right. The problem is each Envoy node runs a local bucket as a fast path. Three nodes, so each one only allowed a third."],
+    ["Tamir", "So the 3,000 burst became three buckets of a thousand."],
+    ["Priya", "Exactly. The local fast path was meant as a cache but it became the limit."],
+    ["Rob", "We need one source of truth. Buckets only in the shared Redis cluster, no per-node limits."],
+    ["Marcus", "Does that hold up the 5 millisecond budget? C-03."],
+    ["Priya", "Redis is in the same AZ as the gateway. We measured 0.8 milliseconds p99 for the extra round trip."],
+    ["Rob", "Then let's lock it: rate-limit buckets live only in the shared gateway Redis, never per Envoy node."],
+    ["Max", "Agreed."],
+    ["Marcus", "Agreed."],
+    ["Rob", "And before I tell Acme it's fixed I want proof. Priya, replay their sync in staging at 3,000 a second."],
+    ["Priya", "I'll replay the real traffic shape from their logs, 60 seconds at 3,000, and share the graph by Monday."],
+    ["Rob", "Then I'll confirm with Acme."]
+  ],
+  "locks": [
+    { "key": "D-15", "kind": "decision", "text": "Rate-limit buckets live only in the shared gateway Redis cluster, never as per-Envoy-node local buckets, so a tenant's limit is not split across nodes (fixes Acme's throttling under D-12; adds about 0.8 ms p99, within C-03).", "utterances": [3, 5, 6, 8, 9, 10, 11], "lockedBy": "Rob" },
+    { "key": "T-02", "kind": "action", "text": "Priya replays Acme's nightly sync shape at 3,000 req/s for 60 s in staging and shares the results; Rob then confirms the fix with Acme.", "utterances": [12, 13, 14], "lockedBy": "Rob" }
+  ]
+}

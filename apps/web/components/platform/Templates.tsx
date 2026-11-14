@@ -6,10 +6,11 @@ import { useState } from "react";
 const KINDS = ["decision", "requirement", "constraint", "risk", "open_question", "action", "assumption", "interface", "alternative"];
 type T = { _id: string; name: string; description?: string; persona?: string; proactivity: string; consensus: string; vetoMs: number; captureKinds: string[]; voiceId?: string; version?: number; sessions?: number; updatedBy?: string };
 
-async function send(method: string, path: string, body: unknown) {
+/** POST/PUT/PATCH through /api/worker; a non-2xx reply throws with the worker's error, policy reason and details. */
+export async function send(method: string, path: string, body: unknown) {
   const r = await fetch(`/api/worker/${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error ? `${j.error}${j.details ? ": " + [].concat(j.details).join(", ") : ""}` : `Failed (${r.status})`);
+  if (!r.ok) throw new Error(j.error ? `${j.error}${j.reason ? ": " + j.reason : ""}${j.details ? ": " + [].concat(j.details).join(", ") : ""}` : `Failed (${r.status})`);
   return j;
 }
 

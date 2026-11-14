@@ -16,12 +16,13 @@ export default async function MissionControlHome() {
       <AutoRefresh />
       <header className="p-head">
         <div><h1>Mission control</h1><span className="eyebrow">{k.sessions} sessions · {live.length} live now</span></div>
+        <Link href="/start" className="btn blue sm">Start meeting</Link>
       </header>
 
       <section className="mx-live">
         {live.length ? live.map((s: any) => (
           <Link key={s.id} href={`/sessions/${encodeURIComponent(s.id)}`} className="mx-livecard">
-            <div className="row"><span className="mx-dot" />{s.category}<span className="muted small mx-right">{dur(s.durationMs)}</span></div>
+            <div className="row"><span className="mx-dot" />{s.project} · {s.category}<span className="muted small mx-right">{dur(s.durationMs)}</span></div>
             <b>{s.title}</b>
             <span className="muted small">{[...s.team, ...s.guests].join(", ") || "—"}</span>
             <div className="mx-livestats"><span>{s.utterances} heard</span><span>{s.locked} locked</span><span>{s.says} said</span><span className="mx-open">Open live →</span></div>
@@ -67,12 +68,12 @@ export default async function MissionControlHome() {
       <section className="p-card p-flush">
         <div className="p-card-h mx-pad"><h2>Recent sessions</h2><Link href="/sessions" className="p-more">All sessions</Link></div>
         <table className="p-table">
-          <thead><tr><th>Session</th><th>Type</th><th>People</th><th>Length</th><th className="num">Heard</th><th className="num">Locked</th><th>State</th></tr></thead>
+          <thead><tr><th>Session</th><th>Project</th><th>Type</th><th>People</th><th>Length</th><th className="num">Heard</th><th className="num">Locked</th><th>State</th></tr></thead>
           <tbody>
             {o.sessions.filter((x: any) => x.state !== "live").slice(0, 6).map((s: any) => (
               <tr key={s.id}>
                 <td><Link href={`/sessions/${encodeURIComponent(s.id)}`} className="p-rowlink">{s.title}</Link><span className="muted small p-id">{s.id}</span></td>
-                <td>{s.category}</td><td>{[...s.team, ...s.guests].join(", ") || "—"}</td><td className="mono">{dur(s.durationMs)}</td>
+                <td>{s.project}</td><td>{s.category}</td><td>{[...s.team, ...s.guests].join(", ") || "—"}</td><td className="mono">{dur(s.durationMs)}</td>
                 <td className="num">{s.utterances}</td><td className="num">{s.locked}</td><td><State s={s.state} /></td>
               </tr>
             ))}

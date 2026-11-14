@@ -3,7 +3,10 @@
  *   POST /api/utterances          committed transcript segment in (Recall webhook relay, bot page, or typed)
  *   POST /api/calls               create/ensure a call            PATCH /api/calls/:id  { memoryEnabled }  (A/B memory proof)
  *   GET  /api/says/stream?callId= SSE of Gomon's speech for the bot page     POST /api/says/:sayId/ack { status }
- * Utterance inserts wake the agent through an Atlas change stream (resume token in stream_offsets); a sweep catches anything
+ *   POST /api/meetings            send a Recall bot into a Meet   POST /api/meetings/:callId/leave  take it out, end the call
+ *   GET/POST /api/projects        the team's projects (company context + working projects)
+ * Each call belongs to one project (calls.projectId) and is processed in that project's scope; one change stream covers
+ * the whole team. Utterance inserts wake the agent through it (resume token in stream_offsets); a sweep catches anything
  * missed, and a timer promotes consensus locks after their veto window.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -13,17 +16,25 @@ import { MongoServerError, type ObjectId, type ResumeToken } from "mongodb";
 import { config } from "./config.ts";
 import { cols, connect } from "./db.ts";
 import { handleBatch, sweepLocks, type Stored } from "./agent.ts";
-import { checkPolicy, type Ctx } from "./governance.ts";
+import { checkPolicy, PolicyDenied, type Ctx } from "./governance.ts";
 import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
 import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
 import { parseWake } from "./wake.ts";
-import { login, logout, userFromToken, userIdForDisplayName, visibleCallsFilter } from "./auth.ts";
+import { login, logout, userFromToken, userIdForDisplayName, visibleCallsFilter, type PublicUser } from "./auth.ts";
 import { startRecallVoice } from "./voice.ts";
+import { createBot, leaveBot } from "./recall.ts";
+import { createProjectWithBoard } from "./projects.ts";
+import { COMPANY_PROJECT } from "./scope.ts";
+import { startAnnouncer } from "./announce.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
+/** Base context; `projectId` here is only the fallback for calls without one. Per-call work uses callCtx(). */
 const ctx: Ctx = { client, c, teamId: config.teamId, projectId: config.projectId };
-const STREAM_ID = `worker-utterances:${config.teamId}:${config.projectId}`;
+/** Speaks GitHub/Slack results on the live call and drops the link in the meeting chat, once per action. */
+startAnnouncer(ctx);
+/** One stream per team: calls of every project wake the same worker. */
+const STREAM_ID = `worker-utterances:${config.teamId}`;
 /** Identifies this process on claimed utterances, so a second worker on the same database is visible. */
 const WORKER_ID = `${hostname()}:${process.pid}`;
 
@@ -74,7 +85,7 @@ async function processPending(callId: string): Promise<boolean> {
   const batch = (await c.utterances.find({ claimToken }).sort({ seq: 1 }).toArray()) as Stored[];
   if (!batch.length) return true;
   try {
-    await handleBatch(ctx, batch);
+    await handleBatch(await callCtx(callId), batch);
     await c.utterances.updateMany({ claimToken }, { $set: { processedAt: new Date() } });
   } catch (e) {
     console.error(`[agent] batch of ${batch.length} in ${callId} failed:`, e);
@@ -83,19 +94,30 @@ async function processPending(callId: string): Promise<boolean> {
   return true;
 }
 
+/** The scope a call is processed in: its own project (legacy calls without one fall back to PROJECT_ID). */
+async function callCtx(callId: string): Promise<Ctx> {
+  const call = await c.calls.findOne({ _id: callId as never }, { projection: { projectId: 1 } });
+  return { ...ctx, projectId: typeof call?.projectId === "string" ? call.projectId : config.projectId };
+}
+
+/** One team-wide sweep: sweepLocks promotes each item into its own project. */
+async function sweepAllLocks(): Promise<void> {
+  await sweepLocks(ctx);
+}
+
 async function catchUp(): Promise<void> {
   const stale = new Date(Date.now() - 120_000);
   await c.utterances.updateMany(
-    { teamId: config.teamId, projectId: config.projectId, processedAt: { $exists: false }, claimedAt: { $lt: stale } },
+    { teamId: config.teamId, processedAt: { $exists: false }, claimedAt: { $lt: stale } },
     { $unset: { claimedAt: "", claimToken: "" } },
   );
-  const calls = await c.utterances.distinct("callId", { teamId: config.teamId, projectId: config.projectId, processedAt: { $exists: false } });
+  const calls = await c.utterances.distinct("callId", { teamId: config.teamId, processedAt: { $exists: false } });
   for (const callId of calls) schedule(callId);
 }
 
 async function watchUtterances(): Promise<void> {
   const saved = await c.streamOffsets.findOne({ _id: STREAM_ID });
-  const pipeline = [{ $match: { operationType: "insert", "fullDocument.teamId": config.teamId, "fullDocument.projectId": config.projectId } }];
+  const pipeline = [{ $match: { operationType: "insert", "fullDocument.teamId": config.teamId } }];
   const open = (resumeAfter?: unknown) => c.utterances.watch(pipeline, resumeAfter ? { resumeAfter: resumeAfter as ResumeToken } : {});
   let stream = open(saved?.token);
   stream.on("error", (e) => {
@@ -124,8 +146,10 @@ function send(res: ServerResponse, status: number, data: unknown): void {
 }
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
-async function ensureCall(callId: string, opts: { title?: string; speaker?: string; meetingUrl?: string; templateId?: string; botId?: string; ownerUserId?: string } = {}): Promise<number> {
-  const { title, speaker, meetingUrl, templateId, botId, ownerUserId } = opts;
+type CallOpts = { title?: string; speaker?: string; meetingUrl?: string; templateId?: string; botId?: string; ownerUserId?: string; projectId?: string };
+/** Upsert the call (first utterance or explicit create); returns the next utterance seq and the call's project. */
+async function ensureCall(callId: string, opts: CallOpts = {}): Promise<{ seq: number; projectId: string }> {
+  const { title, speaker, meetingUrl, templateId, botId, ownerUserId, projectId } = opts;
   const speakerUserId = speaker ? await userIdForDisplayName(c, config.teamId, speaker) : null;
   const addToSet: Record<string, string> = {};
   if (speaker) addToSet.participants = speaker;
@@ -135,7 +159,7 @@ async function ensureCall(callId: string, opts: { title?: string; speaker?: stri
     {
       $inc: { utteranceSeq: speaker ? 1 : 0 },
       $setOnInsert: {
-        teamId: config.teamId, projectId: config.projectId, title: title ?? "Design call", status: "live", startedAt: new Date(), memoryEnabled: true,
+        teamId: config.teamId, projectId: projectId ?? config.projectId, title: title ?? "Design call", status: "live", startedAt: new Date(), memoryEnabled: true,
         templateId: templateId ?? DEFAULT_TEMPLATE_ID, ...(meetingUrl ? { meetingUrl } : {}), ...(ownerUserId ? { ownerUserId } : {}),
       },
       ...(botId ? { $set: { botId } } : {}),
@@ -143,7 +167,7 @@ async function ensureCall(callId: string, opts: { title?: string; speaker?: stri
     },
     { upsert: true, returnDocument: "after" },
   );
-  return Number(call?.utteranceSeq ?? 0);
+  return { seq: Number(call?.utteranceSeq ?? 0), projectId: typeof call?.projectId === "string" ? call.projectId : config.projectId };
 }
 
 async function postUtterance(b: Record<string, unknown>) {
@@ -154,9 +178,9 @@ async function postUtterance(b: Record<string, unknown>) {
   const sourceKey = str(b.sourceKey) ?? randomUUID();
   // Recall sourceKeys are recall:<botId>:<participantId>:<start>; the bot id lets Gomon post to the meeting chat.
   const botId = /^recall:([^:]+):/.exec(sourceKey)?.[1];
-  const seq = await ensureCall(callId, { speaker: speakerName, botId });
+  const { seq, projectId } = await ensureCall(callId, { speaker: speakerName, botId });
   const doc: Utterance = {
-    callId, teamId: config.teamId, projectId: config.projectId, seq, sourceKey,
+    callId, teamId: config.teamId, projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
     ...(str(b.startedAt) ? { startedAt: new Date(String(b.startedAt)) } : {}), ...(str(b.endedAt) ? { endedAt: new Date(String(b.endedAt)) } : {}),
   };
@@ -184,8 +208,107 @@ function streamSays(req: IncomingMessage, res: ServerResponse, callId: string): 
   req.on("close", () => { clearInterval(ka); void cs.close(); void st.close(); });
 }
 
-async function audit(type: string, actor: string, reason: string, ref: Record<string, unknown>, callId?: string): Promise<void> {
-  await c.auditEvents.insertOne({ teamId: config.teamId, projectId: config.projectId, at: new Date(), type, actor, reason, ref, ...(callId ? { callId } : {}) });
+async function audit(type: string, actor: string, reason: string, ref: Record<string, unknown>, callId?: string, projectId = config.projectId): Promise<void> {
+  await c.auditEvents.insertOne({ teamId: config.teamId, projectId, at: new Date(), type, actor, reason, ref, ...(callId ? { callId } : {}) });
+}
+
+const errText = (e: unknown) => String(e instanceof Error ? e.message : e);
+const newCallId = () => `call-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}-${randomUUID().slice(0, 4)}`;
+
+/** A call must belong to an active working project of this team; company context is read by every call, never a call's home. */
+async function projectError(projectId: string): Promise<string | null> {
+  if (projectId === COMPANY_PROJECT) return "company context is not a working project; pick a project";
+  const p = await c.projects.findOne({ _id: projectId as never, teamId: config.teamId, status: "active" }, { projection: { _id: 1 } });
+  return p ? null : `unknown or archived project ${projectId}`;
+}
+
+/** Who is asking: the signed-in user's team member name (policies key on members.displayName), else the workspace's `actor`. */
+async function requester(me: PublicUser | null, b: Record<string, unknown>): Promise<string | undefined> {
+  if (!me) return str(b.actor);
+  const m = await c.members.findOne({ teamId: config.teamId, displayName: { $in: me.displayNames } }, { projection: { displayName: 1 } });
+  return m ? String(m.displayName) : me.name;
+}
+
+type Reply = { status: number; data: unknown };
+
+/**
+ * Start a meeting: policy start_meeting, create the call in its project, then dispatch the Recall bot for it. The call row
+ * exists before the bot, so the bot's first transcript lands in the right project; a failed dispatch marks the call failed.
+ */
+async function startMeeting(b: Record<string, unknown>, me: PublicUser | null): Promise<Reply> {
+  const meetingUrl = str(b.meetingUrl);
+  if (!meetingUrl || !/^https:\/\//.test(meetingUrl)) return { status: 400, data: { error: "meetingUrl (https) required" } };
+  if (!config.recall.apiKey || !config.recall.publicBaseUrl) return { status: 503, data: { error: "Recall is not configured: set RECALL_API_KEY and PUBLIC_BASE_URL" } };
+  const actor = await requester(me, b);
+  if (!actor) return { status: 400, data: { error: "actor required (or sign in)" } };
+  const projectId = str(b.projectId) ?? config.projectId;
+  const bad = await projectError(projectId);
+  if (bad) return { status: 400, data: { error: bad } };
+  const templateId = str(b.templateId);
+  if (templateId && !(await c.agentTemplates.findOne({ _id: templateId, teamId: config.teamId }))) return { status: 400, data: { error: `unknown template ${templateId}` } };
+  const policy = await checkPolicy({ ...ctx, projectId }, actor, "start_meeting");
+  if (!policy.allowed) {
+    await audit("policy_denied", actor, policy.reason, { action: "start_meeting", meetingUrl }, undefined, projectId);
+    return { status: 403, data: { error: "policy_denied", reason: policy.reason } };
+  }
+  const callId = newCallId();
+  const title = str(b.title) ?? "Design call";
+  const ownerUserId = me?._id ?? (await userIdForDisplayName(c, config.teamId, actor)) ?? undefined;
+  await ensureCall(callId, { title, meetingUrl, templateId, projectId, ownerUserId });
+  let botId: string;
+  try {
+    botId = await createBot(meetingUrl, callId);
+  } catch (e) {
+    const error = errText(e);
+    await c.calls.updateOne({ _id: callId as never }, { $set: { status: "failed", error, endedAt: new Date() } });
+    await audit("meeting_failed", actor, error, { meetingUrl }, callId, projectId);
+    return { status: 502, data: { error, callId } };
+  }
+  await c.calls.updateOne({ _id: callId as never }, { $set: { botId, requestedBy: actor } });
+  await audit("meeting_started", actor, `${title} (${projectId})`, { botId, meetingUrl, policyId: policy.policyId, templateId: templateId ?? DEFAULT_TEMPLATE_ID }, callId, projectId);
+  return { status: 201, data: { callId, botId, projectId } };
+}
+
+/** Take Gomon out of the meeting and end the call. The call ends even if Recall reports the bot already gone. */
+async function leaveMeeting(callId: string, b: Record<string, unknown>, me: PublicUser | null): Promise<Reply> {
+  const call = await c.calls.findOne({ _id: callId as never, teamId: config.teamId });
+  if (!call) return { status: 404, data: { error: "not found" } };
+  const actor = (await requester(me, b)) ?? "workspace";
+  const botId = typeof call.botId === "string" ? call.botId : undefined;
+  let recallError: string | undefined;
+  if (botId) {
+    try { await leaveBot(botId); } catch (e) { recallError = errText(e); }
+  }
+  await c.calls.updateOne({ _id: callId as never }, { $set: { status: "ended", endedAt: new Date() } });
+  await audit("meeting_ended", actor, recallError ? `bot leave failed: ${recallError}` : botId ? "Gomon left the meeting" : "ended (no bot)", { botId: botId ?? null }, callId, typeof call.projectId === "string" ? call.projectId : config.projectId);
+  return { status: 200, data: { callId, status: "ended", botId: botId ?? null, ...(recallError ? { recallError } : {}) } };
+}
+
+/** Active projects of the team (company context included, flagged) with active-memory and call counts. */
+async function listProjects(): Promise<unknown[]> {
+  const teamId = config.teamId;
+  const [projects, mems, calls] = await Promise.all([
+    c.projects.find({ teamId, status: "active" }).sort({ createdAt: 1 }).toArray(),
+    c.memories.aggregate<{ _id: string; n: number }>([{ $match: { teamId, status: "active" } }, { $group: { _id: "$projectId", n: { $sum: 1 } } }]).toArray(),
+    c.calls.aggregate<{ _id: string; n: number }>([{ $match: { teamId } }, { $group: { _id: "$projectId", n: { $sum: 1 } } }]).toArray(),
+  ]);
+  const m = new Map(mems.map((r) => [r._id, r.n])), k = new Map(calls.map((r) => [r._id, r.n]));
+  return projects.map((p) => ({ ...p, company: String(p._id) === COMPANY_PROJECT, memories: m.get(String(p._id)) ?? 0, calls: k.get(String(p._id)) ?? 0 }));
+}
+
+/** Create a project from the workspace; createProjectWithBoard checks create_project, audits, and queues the GitHub board. */
+async function postProject(b: Record<string, unknown>, me: PublicUser | null): Promise<Reply> {
+  const name = str(b.name);
+  if (!name) return { status: 400, data: { error: "name required" } };
+  const actor = await requester(me, b);
+  if (!actor) return { status: 400, data: { error: "actor required (or sign in)" } };
+  try {
+    const r = await createProjectWithBoard(ctx, { name, description: str(b.description), actor });
+    return r.created ? { status: 201, data: r } : { status: 409, data: { ...r, error: `a project named "${r.name}" already exists` } };
+  } catch (e) {
+    if (e instanceof PolicyDenied) return { status: 403, data: { error: "policy_denied", reason: e.result.reason } };
+    throw e;
+  }
 }
 
 /** Create (no id) or update (id) an agent template. Leads only (policy manage_templates); every change is versioned and audited. */
@@ -255,7 +378,7 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/me") return me ? send(res, 200, me) : send(res, 401, { error: "not signed in" });
     if (req.method === "GET" && url.pathname === "/api/me/calls") {
       if (!me) return send(res, 401, { error: "not signed in" });
-      const calls = await c.calls.find(visibleCallsFilter(me), { projection: { title: 1, status: 1, startedAt: 1, participants: 1, ownerUserId: 1, templateId: 1, agentState: 1 } })
+      const calls = await c.calls.find(visibleCallsFilter(me), { projection: { title: 1, status: 1, startedAt: 1, participants: 1, ownerUserId: 1, templateId: 1, agentState: 1, projectId: 1 } })
         .sort({ startedAt: -1 }).limit(100).toArray();
       return send(res, 200, calls);
     }
@@ -263,9 +386,26 @@ const server = createServer(async (req, res) => {
       const b = await body(req);
       const templateId = str(b.templateId);
       if (templateId && !(await c.agentTemplates.findOne({ _id: templateId, teamId: config.teamId }))) return send(res, 400, { error: `unknown template ${templateId}` });
-      const callId = str(b.callId) ?? `call-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}-${randomUUID().slice(0, 4)}`;
-      await ensureCall(callId, { title: str(b.title), meetingUrl: str(b.meetingUrl), templateId, ownerUserId: me?._id });
-      return send(res, 201, { callId, templateId: templateId ?? DEFAULT_TEMPLATE_ID, ownerUserId: me?._id ?? null });
+      const projectId = str(b.projectId);
+      const bad = projectId ? await projectError(projectId) : null;
+      if (bad) return send(res, 400, { error: bad });
+      const callId = str(b.callId) ?? newCallId();
+      const call = await ensureCall(callId, { title: str(b.title), meetingUrl: str(b.meetingUrl), templateId, ownerUserId: me?._id, projectId });
+      return send(res, 201, { callId, projectId: call.projectId, templateId: templateId ?? DEFAULT_TEMPLATE_ID, ownerUserId: me?._id ?? null });
+    }
+    if (req.method === "POST" && url.pathname === "/api/meetings") {
+      const r = await startMeeting(await body(req), me);
+      return send(res, r.status, r.data);
+    }
+    const leaveMatch = /^\/api\/meetings\/([^/]+)\/leave$/.exec(url.pathname);
+    if (req.method === "POST" && leaveMatch) {
+      const r = await leaveMeeting(decodeURIComponent(leaveMatch[1]), await body(req), me);
+      return send(res, r.status, r.data);
+    }
+    if (req.method === "GET" && url.pathname === "/api/projects") return send(res, 200, await listProjects());
+    if (req.method === "POST" && url.pathname === "/api/projects") {
+      const r = await postProject(await body(req), me);
+      return send(res, r.status, r.data);
     }
     const callMatch = /^\/api\/calls\/([^/]+)$/.exec(url.pathname);
     if (req.method === "PATCH" && callMatch) {
@@ -279,9 +419,9 @@ const server = createServer(async (req, res) => {
         set.templateId = templateId;
       }
       if (!Object.keys(set).length) return send(res, 400, { error: "memoryEnabled (boolean) or templateId required" });
-      const r = await c.calls.updateOne({ _id: callId as never }, { $set: set });
-      if (r.matchedCount && templateId) await audit("template_assigned", str(b.actor) ?? "workspace", templateId, { templateId }, callId);
-      return send(res, r.matchedCount ? 200 : 404, set);
+      const call = await c.calls.findOneAndUpdate({ _id: callId as never }, { $set: set }, { projection: { projectId: 1 } });
+      if (call && templateId) await audit("template_assigned", str(b.actor) ?? "workspace", templateId, { templateId }, callId, typeof call.projectId === "string" ? call.projectId : config.projectId);
+      return send(res, call ? 200 : 404, set);
     }
     if (req.method === "GET" && url.pathname === "/api/templates") {
       return send(res, 200, await c.agentTemplates.find({ teamId: config.teamId }).sort({ name: 1 }).toArray());
@@ -311,14 +451,14 @@ const server = createServer(async (req, res) => {
     send(res, 404, { error: "not found" });
   } catch (e) {
     console.error("[http]", e);
-    send(res, 500, { error: String(e instanceof Error ? e.message : e) });
+    send(res, 500, { error: errText(e) });
   }
 });
 
-server.listen(config.port, () => console.log(`[http] gomon worker on :${config.port} (db ${config.dbName}, ${config.teamId}/${config.projectId})`));
+server.listen(config.port, () => console.log(`[http] gomon worker on :${config.port} (db ${config.dbName}, team ${config.teamId}, default project ${config.projectId})`));
 // VOICE_OUT=recall: the worker speaks into meetings itself (ElevenLabs mp3 -> Recall output_audio); the bot page only relays webhooks.
 if (process.env.VOICE_OUT === "recall") startRecallVoice(c, console.log);
-setInterval(() => { sweepLocks(ctx).catch((e) => console.error("[locks]", e)); }, 1000);
+setInterval(() => { sweepAllLocks().catch((e) => console.error("[locks]", e)); }, 1000);
 setInterval(() => { catchUp().catch((e) => console.error("[catchup]", e)); }, 15_000);
 await catchUp();
 await watchUtterances();

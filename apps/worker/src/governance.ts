@@ -5,7 +5,8 @@
  */
 import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import type { Cols } from "./db.ts";
-import type { AuditEvent, CallItem, ItemKind, Memory } from "./shapes.ts";
+import { loadPeople, peopleIn } from "./people.ts";
+import type { AuditEvent, CallItem, GithubOp, ItemKind, Memory } from "./shapes.ts";
 
 /** `voiceId` is the call's agent-template voice, stamped onto every `says` row written with this context. */
 export type Ctx = { client: MongoClient; c: Cols; teamId: string; projectId: string; voiceId?: string };
@@ -25,11 +26,12 @@ export async function checkPolicy(ctx: Ctx, actor: string, action: string): Prom
   return { allowed: ok, reason: ok ? `role ${member.role} may ${action}` : `role ${member.role} may not ${action}`, policyId: String(policy._id), checkedAt };
 }
 
-async function audit(ctx: Ctx, e: Omit<AuditEvent, "teamId" | "projectId" | "at">, session?: ClientSession) {
+export async function audit(ctx: Ctx, e: Omit<AuditEvent, "teamId" | "projectId" | "at">, session?: ClientSession) {
   await ctx.c.auditEvents.insertOne({ teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), ...e }, { session });
 }
 
-async function gate(ctx: Ctx, actor: string, action: string, callId?: string, ref?: Record<string, unknown>) {
+/** Policy check that audits a denial and throws PolicyDenied (callers speak or return the reason). */
+export async function gate(ctx: Ctx, actor: string, action: string, callId?: string, ref?: Record<string, unknown>) {
   const result = await checkPolicy(ctx, actor, action);
   if (!result.allowed) {
     await audit(ctx, { callId, type: "policy_denied", actor, reason: result.reason, ref: { action, ...ref } });
@@ -42,13 +44,16 @@ const PREFIX: Record<ItemKind, string> = {
   decision: "D", requirement: "R", constraint: "C", risk: "K", open_question: "Q", action: "T", assumption: "A", interface: "I", alternative: "L",
 };
 
-/** Next human-readable key for a kind (D-12, R-16 …), continuing after the seeded keys. */
+/**
+ * Next human-readable key for a kind (D-12, R-16 …). Keys are unique per TEAM across projects (a spoken key names one memory),
+ * so the counter is `${teamId}/${prefix}` and its first value continues after the highest key anywhere in the team.
+ */
 async function nextKey(ctx: Ctx, kind: ItemKind, session: ClientSession): Promise<string> {
   const p = PREFIX[kind];
-  const id = `${ctx.teamId}/${ctx.projectId}/${p}`;
+  const id = `${ctx.teamId}/${p}`;
   let row = await ctx.c.counters.findOneAndUpdate({ _id: id }, { $inc: { n: 1 } }, { session, returnDocument: "after" });
   if (!row) {
-    const existing = await ctx.c.memories.find({ teamId: ctx.teamId, projectId: ctx.projectId, key: { $regex: `^${p}-\\d+$` } }, { session, projection: { key: 1 } }).toArray();
+    const existing = await ctx.c.memories.find({ teamId: ctx.teamId, key: { $regex: `^${p}-\\d+$` } }, { session, projection: { key: 1 } }).toArray();
     const max = existing.reduce((m, d) => Math.max(m, Number(d.key?.split("-")[1] ?? 0)), 0);
     row = await ctx.c.counters.findOneAndUpdate({ _id: id }, { $setOnInsert: { n: max + 1 } }, { session, upsert: true, returnDocument: "after" });
   }
@@ -145,21 +150,45 @@ export async function forgetMemory(ctx: Ctx, memoryId: ObjectId, actor: string, 
   return forgotten;
 }
 
+/** Issue title/body/labels for a memory: one format for "create the tickets", workflows and a voice "file R-21". */
+export function memoryIssue(m: Memory & { _id: ObjectId }, callId: string): { title: string; body: string; labels: string[] } {
+  const origin = m.origin === "call" ? `Locked on call \`${callId}\` by ${m.lock?.participants?.join(", ") ?? "the team"}.` : "From team memory.";
+  return { title: `${m.key ?? m.kind}: ${m.text.slice(0, 72)}`, body: `${m.text}\n\n${origin}\nMemory \`${m._id}\` v${m.version} (${m.key ?? m.kind}).`, labels: ["gomon", m.kind] };
+}
+
+/** Words long enough to tie an action item to the decision it implements ("Max wires the burst limiter" ~ "burst limiter"). */
+const contentWords = (s: string) => new Set(s.toLowerCase().match(/[a-z0-9]{5,}/g) ?? []);
+
 /**
  * External effects only enqueue to the outbox; apps/connectors does the policy check and the send. The idempotency key is
  * `${type}:${callId}:${memoryId}:v${version}` (agreed with apps/web) so voice and UI never file the same decision version twice.
+ * Issues are assigned to people the decision names (or an action item on this call that names them and shares its subject),
+ * and go onto the call project's GitHub board when it has one.
  */
-export async function enqueueForCall(ctx: Ctx, type: "create_issue" | "post_slack", callId: string, actor: string): Promise<{ queued: number; existing: number }> {
+export async function enqueueForCall(ctx: Ctx, type: "create_issue" | "post_slack", callId: string, actor: string): Promise<{ queued: number; existing: number; assigned: string[] }> {
   const mems = await ctx.c.memories.find({ teamId: ctx.teamId, projectId: ctx.projectId, status: "active", origin: "call", "sourceRefs.callId": callId }).toArray();
+  const [people, actionItems, project] = type === "create_issue" && mems.length
+    ? await Promise.all([
+      loadPeople(ctx),
+      ctx.c.callItems.find({ callId, kind: "action" }, { projection: { text: 1 } }).toArray(),
+      ctx.c.projects.findOne({ _id: ctx.projectId as never, teamId: ctx.teamId }, { projection: { github: 1 } }),
+    ])
+    : [[], [], null];
   let queued = 0, existing = 0;
+  const assigned = new Set<string>();
   for (const m of mems) {
     const idempotencyKey = `${type}:${callId}:${m._id}:v${m.version}`;
-    const payload = type === "create_issue"
-      ? { title: `${m.key ?? m.kind}: ${m.text.slice(0, 72)}`, body: `${m.text}\n\nLocked on call \`${callId}\` by ${m.lock?.participants?.join(", ") ?? "the team"}.\nMemory \`${m._id}\` v${m.version} (${m.key ?? m.kind}).`, labels: ["gomon", m.kind] }
-      : { text: `Decision locked (${m.key ?? m.kind}): ${m.text}`, callId, memoryId: String(m._id) };
+    let payload: Record<string, unknown>;
+    if (type === "create_issue") {
+      const words = contentWords(m.text);
+      const linked = actionItems.filter((i) => [...contentWords(i.text)].filter((w) => words.has(w)).length >= 2).map((i) => i.text);
+      const owners = [...new Map([m.text, ...linked].flatMap((t) => peopleIn(t, people)).map((p) => [p.login, p])).values()];
+      owners.forEach((p) => assigned.add(p.display));
+      payload = { ...memoryIssue(m, callId), assignees: owners.map((p) => p.login), ...(project?.github?.projectId ? { project: ctx.projectId } : {}) };
+    } else payload = { text: `Decision locked (${m.key ?? m.kind}): ${m.text}`, callId, memoryId: String(m._id) };
     const r = await ctx.c.actions.updateOne(
       { idempotencyKey },
-      { $setOnInsert: { idempotencyKey, callId, teamId: ctx.teamId, projectId: ctx.projectId, type, payload, requestedBy: actor, status: "queued", attempts: 0, createdAt: new Date(), memoryId: m._id } },
+      { $setOnInsert: { idempotencyKey, callId, teamId: ctx.teamId, projectId: ctx.projectId, type, payload, requestedBy: actor, status: "queued", attempts: 0, createdAt: new Date(), memoryId: m._id, announce: true } },
       { upsert: true },
     );
     if (r.upsertedCount) {
@@ -167,7 +196,36 @@ export async function enqueueForCall(ctx: Ctx, type: "create_issue" | "post_slac
       await audit(ctx, { callId, type: "action_enqueued", actor, reason: type, ref: { idempotencyKey, memoryId: m._id } });
     } else existing++;
   }
-  return { queued, existing };
+  return { queued, existing, assigned: [...assigned] };
+}
+
+/** Deterministic key for a voice GitHub request: the same utterance can never enqueue the same op twice. */
+export function githubKey(callId: string, utteranceId: ObjectId | string, op: GithubOp, n: number): string {
+  return `github:${callId}:${utteranceId}:${op}:${n}`;
+}
+
+/**
+ * Enqueue one GitHub op (contract 6) after a worker-side policy check, so a denial is spoken at once; apps/connectors checks
+ * again before sending. `announce` makes the announcer speak the result on the call. Returns false if the key already existed.
+ */
+export async function enqueueGithub(
+  ctx: Ctx, callId: string | undefined, actor: string, op: GithubOp, args: Record<string, unknown>, idempotencyKey: string,
+  extra: { memoryId?: ObjectId; announce?: boolean } = {},
+): Promise<boolean> {
+  await gate(ctx, actor, op === "create_project" ? "create_project" : "github_write", callId, { op, idempotencyKey });
+  const r = await ctx.c.actions.updateOne(
+    { idempotencyKey },
+    {
+      $setOnInsert: {
+        type: "github", teamId: ctx.teamId, projectId: ctx.projectId, ...(callId ? { callId } : {}), payload: { op, ...args },
+        requestedBy: actor, idempotencyKey, status: "queued", attempts: 0, createdAt: new Date(), announce: extra.announce ?? !!callId,
+        ...(extra.memoryId ? { memoryId: extra.memoryId } : {}),
+      },
+    },
+    { upsert: true },
+  );
+  if (r.upsertedCount) await audit(ctx, { callId, type: "action_enqueued", actor, reason: `github ${op}`, ref: { idempotencyKey, ...(extra.memoryId ? { memoryId: extra.memoryId } : {}) } });
+  return r.upsertedCount > 0;
 }
 
 export function oid(id: string): ObjectId | null {

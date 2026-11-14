@@ -1,5 +1,5 @@
 import { ObjectId } from "mongodb";
-import { client, db, scope } from "@/lib/db";
+import { callScope, client, db } from "@/lib/db";
 import { PolicyDenied, NotFound, correctMemory, enqueueAction, forgetMemory, lockItem, rejectItem } from "@/lib/governance";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,7 +9,7 @@ export async function POST(req: Request) {
   const b = await req.json().catch(() => ({}));
   const { op, id, text, actor, callId } = b as { op: string; id?: string; text?: string; actor?: string; callId?: string };
   if (!op || !actor) return Response.json({ error: "op and actor required" }, { status: 400 });
-  const c = await client(); const d = await db(); const ctx = { c, d, ...scope() };
+  const c = await client(); const d = await db(); const ctx = { c, d, ...(await callScope(callId)) };
   try {
     switch (op) {
       case "lock": return Response.json(await lockItem(ctx, id!, actor));

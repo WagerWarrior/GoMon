@@ -4,6 +4,8 @@
  */
 import type { Db } from "mongodb";
 import { cached, db, dbName, scope } from "./db";
+import { projectNames } from "./projects";
+import { actionKind, describeAction } from "./actions";
 import { stageStats } from "./stats";
 
 const plain = <T>(v: unknown): T => JSON.parse(JSON.stringify(v));
@@ -14,9 +16,11 @@ export interface SessionRow {
   utterances: number; items: number; locked: number; says: number; actions: number; memoryEnabled: boolean;
   lastAt: string | null; state: "live" | "ended" | "failed"; voice: boolean; team: string[]; guests: string[];
   category: string; templateId: string; failedActions: number; unprocessed: number;
+  /** The call's project (calls.projectId) and its display name. */
+  projectId: string; project: string;
 }
 
-/** A session is live while anything happened in the last 5 minutes (calls are never closed explicitly). */
+/** A session is live while anything happened in the last 5 minutes, unless it was ended explicitly (bot removed). */
 export const LIVE_MS = 5 * 60_000;
 const TEMPLATE_CATEGORY: Record<string, string> = { "design-review": "Design review", "silent-scribe": "Notes only", "architecture-challenger": "Architecture" };
 export function categorize(c: { _id?: unknown; title?: string; category?: string; templateId?: string }) {
@@ -35,7 +39,8 @@ async function counts(d: Db, coll: string, match: object, extra: object = {}) {
 
 export function sessions(limit = 200): Promise<SessionRow[]> { return cached(`sessions:${limit}`, 2000, () => loadSessions(limit)); }
 async function loadSessions(limit: number): Promise<SessionRow[]> {
-  const d = await db(); const { teamId, projectId } = scope(); const tp = { teamId, projectId };
+  // All of the team's projects: a call belongs to one project, and the workspace shows every one of them.
+  const d = await db(); const { teamId, projectId: defaultProject } = scope(); const tp = { teamId };
   const [calls, utt, items, says, acts, members] = await Promise.all([
     d.collection("calls").find(tp).sort({ startedAt: -1 }).limit(limit).toArray(),
     counts(d, "utterances", tp, { first: { $min: { $ifNull: ["$startedAt", "$receivedAt"] } }, last: { $max: { $ifNull: ["$endedAt", { $ifNull: ["$receivedAt", "$startedAt"] }] } }, speakers: { $addToSet: "$speaker.displayName" }, recall: { $sum: { $cond: [{ $eq: ["$source", "recall"] }, 1, 0] } }, unprocessed: { $sum: { $cond: [{ $ifNull: ["$processedAt", false] }, 0, 1] } } }),
@@ -44,6 +49,7 @@ async function loadSessions(limit: number): Promise<SessionRow[]> {
     counts(d, "actions", tp, { failed: { $sum: { $cond: [{ $in: ["$status", ["failed", "denied"]] }, 1, 0] } } }),
     d.collection("members").find({ teamId }).project({ displayName: 1 }).toArray(),
   ]);
+  const names = await projectNames();
   const team = new Set(members.map((m) => String(m.displayName).toLowerCase()));
   const now = Date.now();
   return calls.map((c) => {
@@ -52,12 +58,14 @@ async function loadSessions(limit: number): Promise<SessionRow[]> {
     const people = [...new Set<string>([...(c.participants ?? []), ...((u?.speakers ?? []) as string[]).filter((s) => s !== "Gomon")])].filter((p) => p !== "Mission control");
     const lastAt = Math.max(ms(u?.last) || 0, ms(says.get(id)?.last) || 0, ms(c.startedAt) || 0);
     const failedActions = acts.get(id)?.failed ?? 0;
-    const state: SessionRow["state"] = now - lastAt < LIVE_MS ? "live" : (u?.n ?? 0) === 0 || failedActions > 0 ? "failed" : "ended";
+    const ended = c.status === "ended" || c.status === "failed";
+    const state: SessionRow["state"] = !ended && now - lastAt < LIVE_MS ? "live" : c.status === "failed" || failedActions > 0 || ((u?.n ?? 0) === 0 && !ended) ? "failed" : "ended";
+    const pid = typeof c.projectId === "string" ? c.projectId : defaultProject;
     return {
       lastAt: lastAt ? new Date(lastAt).toISOString() : null, state, voice: (u?.recall ?? 0) > 0,
       team: people.filter((p) => team.has(p.toLowerCase())), guests: people.filter((p) => !team.has(p.toLowerCase())),
       category: categorize(c as any), templateId: c.templateId ?? "design-review", failedActions, unprocessed: u?.unprocessed ?? 0,
-      id, title: c.title || "Design call", status: c.status || "unknown", participants: people,
+      id, title: c.title || "Design call", status: c.status || "unknown", participants: people, projectId: pid, project: names.get(pid) ?? pid,
       startedAt: c.startedAt ? new Date(c.startedAt).toISOString() : null,
       durationMs: Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null,
       utterances: u?.n ?? 0, items: items.get(id)?.n ?? 0, locked: items.get(id)?.locked ?? 0,
@@ -94,7 +102,7 @@ async function loadSession(callId: string) {
   const links = [
     ...(call?.meetingUrl ? [{ kind: "Meeting", label: "Join link", url: call.meetingUrl }] : []),
     ...(call?.slackThreadTs && channel ? [{ kind: "Slack", label: "Call thread", url: `https://slack.com/archives/${channel}/p${String(call.slackThreadTs).replace(".", "")}` }] : []),
-    ...actions.filter((a) => a.externalId).map((a) => ({ kind: a.type === "create_issue" ? "GitHub" : "Slack", label: a.payload?.title ?? a.externalId, url: a.externalUrl ?? (a.type === "post_slack" ? slackUrl(a.externalId) : null), status: a.status })),
+    ...actions.filter((a) => a.externalId).map((a) => ({ kind: a.type === "post_slack" ? "Slack" : "GitHub", label: a.type === "github" ? describeAction(a) : a.payload?.title ?? a.externalId, url: a.externalUrl ?? (a.type === "post_slack" ? slackUrl(a.externalId) : null), status: a.status })),
     ...docs.map((x) => ({ kind: "Doc", label: String(x._id), url: null })),
   ];
   return plain<any>({ call, row, utterances, items, says, runs, timings, stages: stageStats(timings as any), conflicts, actions, audit, links, memIds });
@@ -103,7 +111,7 @@ async function loadSession(callId: string) {
 export interface Bucket { t: string; n: number }
 export function overview() { return cached("overview", 2000, loadOverview); }
 async function loadOverview() {
-  const d = await db(); const { teamId, projectId } = scope(); const tp = { teamId, projectId };
+  const d = await db(); const { teamId } = scope(); const tp = { teamId };
   const [rows, itemStatus, memKinds, memStatus, actionStatus, timings, uttTimes, says, audit] = await Promise.all([
     sessions(),
     d.collection("call_items").aggregate([{ $match: tp }, { $group: { _id: "$status", n: { $sum: 1 } } }]).toArray(),
@@ -172,7 +180,7 @@ async function loadOverview() {
 export interface ActivityRow { at: string; kind: string; actor: string; text: string; callId?: string; tone?: "good" | "bad" | "warn" }
 export function activity(limit = 300, callId?: string): Promise<ActivityRow[]> { return cached(`activity:${limit}:${callId ?? ""}`, 2000, () => loadActivity(limit, callId)); }
 async function loadActivity(limit: number, callId?: string): Promise<ActivityRow[]> {
-  const d = await db(); const { teamId, projectId } = scope(); const q: any = callId ? { callId } : { teamId, projectId };
+  const d = await db(); const { teamId } = scope(); const q: any = callId ? { callId } : { teamId };
   const [audit, says, acts, runs, conflicts] = await Promise.all([
     d.collection("audit_events").find(q).sort({ at: -1 }).limit(limit).toArray(),
     d.collection("says").find(q).sort({ createdAt: -1 }).limit(limit).toArray(),
@@ -184,21 +192,23 @@ async function loadActivity(limit: number, callId?: string): Promise<ActivityRow
   const out: ActivityRow[] = [
     ...audit.map((a) => ({ at: a.at, kind: String(a.type).replace(/_/g, " "), actor: a.actor ?? "system", text: a.reason ?? a.summary ?? "", callId: a.callId, tone: tone(a.type) })),
     ...says.map((s) => ({ at: s.createdAt, kind: `said · ${s.status ?? "queued"}`, actor: "Gomon", text: s.text, callId: s.callId })),
-    ...acts.map((a) => ({ at: a.updatedAt ?? a.createdAt, kind: `${String(a.type).replace(/_/g, " ")} · ${a.status}`, actor: "outbox", text: a.payload?.title ?? a.payload?.text ?? "", callId: a.callId, tone: tone(a.status) })),
+    ...acts.map((a) => ({ at: a.updatedAt ?? a.createdAt, kind: `${actionKind(a)} · ${a.status}`, actor: "outbox", text: describeAction(a), callId: a.callId, tone: tone(a.status) })),
     ...runs.map((r) => ({ at: r.at, kind: r.wake ? "agent run · wake" : "agent run", actor: "worker", text: `${r.batchSize ?? 1} utterance${(r.batchSize ?? 1) === 1 ? "" : "s"}, ${(r.retrievedMemoryIds ?? []).length} memories recalled${r.memoryEnabled === false ? " (memory off)" : ""}`, callId: r.callId })),
     ...conflicts.map((c) => ({ at: c.createdAt, kind: c.kind === "already_decided" ? "already decided" : "conflict", actor: "Gomon", text: `${c.memoryKey ? c.memoryKey + ": " : ""}${c.note ?? ""}`, callId: c.callId, tone: "warn" as const })),
   ].map((r) => ({ ...r, at: new Date(r.at as any).toISOString() }));
   return plain<ActivityRow[]>(out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit));
 }
 
+/** Every memory of the team: company context and each project's own, labeled with the project's name. */
 export async function memories() {
-  const d = await db(); const { teamId, projectId } = scope();
-  return plain<any[]>(await d.collection("memories").find({ teamId, projectId }, { projection: { embedding: 0 } }).sort({ createdAt: -1 }).limit(500).toArray());
+  const d = await db(); const { teamId } = scope();
+  const [rows, names] = await Promise.all([d.collection("memories").find({ teamId }, { projection: { embedding: 0 } }).sort({ createdAt: -1 }).limit(500).toArray(), projectNames()]);
+  return plain<any[]>(rows.map((m) => ({ ...m, projectName: names.get(m.projectId) ?? m.projectId })));
 }
 
 export async function actions() {
-  const d = await db(); const { teamId, projectId } = scope();
-  return plain<any[]>(await d.collection("actions").find({ teamId, projectId }).sort({ createdAt: -1 }).limit(300).toArray());
+  const d = await db(); const { teamId } = scope();
+  return plain<any[]>(await d.collection("actions").find({ teamId }).sort({ createdAt: -1 }).limit(300).toArray());
 }
 
 const set = (k: string) => !!process.env[k];

@@ -1,4 +1,4 @@
-import { db, scope } from "@/lib/db";
+import { callScope, db } from "@/lib/db";
 import { retrieve } from "@/lib/retrieval";
 import { answer } from "@/lib/answer";
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   const b = await req.json().catch(() => ({}));
   const { question, memory, callId, actor } = b as { question?: string; memory?: boolean; callId?: string; actor?: string };
   if (!question?.trim()) return Response.json({ error: "question required" }, { status: 400 });
-  const d = await db(); const sc = scope(); const started = Date.now();
+  const d = await db(); const sc = await callScope(callId); const started = Date.now();
   let hits: Awaited<ReturnType<typeof retrieve>> = [];
   try {
     if (memory) hits = await retrieve(d, sc, question.trim());

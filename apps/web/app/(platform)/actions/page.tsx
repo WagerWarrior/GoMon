@@ -3,6 +3,7 @@ import AutoRefresh from "@/components/platform/AutoRefresh";
 import { actions, sessions } from "@/lib/platform";
 import { groupBy } from "@/lib/group";
 import { toolName } from "@/lib/workflows";
+import { describeAction } from "@/lib/actions";
 import { when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export default async function Actions() {
                 {acts.map((a: any) => (
                   <tr key={a._id}>
                     <td><span className="kind">{toolName(String(a.type))}</span></td>
-                    <td className="p-wide">{a.payload?.title ?? a.payload?.text ?? "—"}</td>
+                    <td className="p-wide">{describeAction(a)}</td>
                     <td>{a.requestedBy ?? "—"}</td>
                     <td className="small">{a.policyCheck ? <span className={a.policyCheck.allowed ? "ok" : "badtxt"}>{a.policyCheck.reason}</span> : "—"}</td>
                     <td className="num">{a.attempts ?? 0}</td>

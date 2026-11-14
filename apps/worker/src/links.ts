@@ -20,12 +20,12 @@ type ActionDoc = { type: string; externalUrl?: string; payload?: { title?: strin
 export async function resolveLink(ctx: Ctx, callId: string, memory: Retrieved | null, query: string): Promise<Link | null> {
   const q = query.toLowerCase();
   const wantsSlack = /slack|thread|channel/.test(q);
-  const typeOrder = wantsSlack ? ["post_slack", "create_issue"] : ["create_issue", "post_slack"];
+  const typeOrder = wantsSlack ? ["post_slack", "create_issue", "github"] : ["create_issue", "github", "post_slack"];
   const pick = (docs: ActionDoc[]) => typeOrder.map((t) => docs.find((d) => d.type === t && d.externalUrl)).find(Boolean);
 
   if (memory) {
     const hit = pick(await ctx.c.actions.find<ActionDoc>({ teamId: ctx.teamId, memoryId: memory._id, externalUrl: { $type: "string" } }).sort({ _id: -1 }).toArray());
-    if (hit?.externalUrl) return { url: hit.externalUrl, label: `${memory.key ?? "Decision"} ${hit.type === "create_issue" ? "on GitHub" : "in Slack"}`, source: "action" };
+    if (hit?.externalUrl) return { url: hit.externalUrl, label: `${memory.key ?? "Decision"} ${hit.type === "post_slack" ? "in Slack" : "on GitHub"}`, source: "action" };
   }
   if (/\brepo(sitory)?\b|codebase|source/.test(q)) return { url: `https://github.com/${env.githubRepo()}`, label: "The repo", source: "repo" };
 

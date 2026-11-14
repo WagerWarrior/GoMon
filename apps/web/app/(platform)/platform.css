@@ -654,6 +654,7 @@
 @media(max-width:1100px){.ch{grid-template-columns:1fr;height:auto}.ch-main{height:75vh}.ch-side{border-left:0;padding-left:0}}
 .tr-ctx summary{display:flex;justify-content:space-between;align-items:baseline;cursor:pointer;list-style:none}.tr-ctx summary::-webkit-details-marker{display:none}
 .tr-ctx ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px;font-size:12px;color:#3c403d;line-height:1.4}.tr-ctx b{font-weight:500;color:#0a0a0a;margin-right:4px}
+<<<<<<< HEAD
 .ie{display:grid;gap:10px}
 .ie textarea{font:400 12.5px/1.6 var(--mono);border:1px solid var(--line);border-radius:12px;padding:10px 12px;resize:vertical;background:#fbfbf9;outline:0}
 .ie textarea:focus{border-color:#bdbbb5;background:#fff}
@@ -676,3 +677,13 @@
 .ad-pick{margin-left:auto;max-width:210px;border:0;background:#ebeae6;border-radius:999px;padding:5px 10px;font:500 12px var(--sans);cursor:pointer}
 .ad-x{margin-left:6px}
 .ad-ctx{display:flex;align-items:center;gap:8px;padding:6px 16px;font-size:11.5px;color:#6b6f6c;border-bottom:1px solid var(--line2);background:#fbfbf9}.ad-ctx a{color:var(--leaf-ink)}
+=======
+/* Start meeting (/start) and Projects (/projects) */
+.mt-form{align-content:start}.mt-form .muted.small{margin:0}
+.mt-list li{display:grid;gap:6px}.mt-list li p{margin:0}
+.mt-leave{display:flex;gap:8px;align-items:center}
+.pj-company{display:grid;gap:12px;margin-bottom:16px}
+.pj-facts dd{text-transform:none}.pj-facts dd a{color:inherit}
+.pj-new{display:grid;gap:8px}.pj-newbtn{min-height:180px}.pj-noboard{align-self:center}
+.mm-scopes{margin:-6px 0 14px}
+>>>>>>> 7338e0f (feat: flexible GitHub actions by voice, projects, start meeting, seeded company context and past meetings)

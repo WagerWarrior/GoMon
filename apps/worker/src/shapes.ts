@@ -78,6 +78,18 @@ export type Say = {
   voiceId?: string;
 };
 
+/** GitHub ops an `actions` row of type "github" can carry (payload.op); apps/connectors sends them. */
+export const GITHUB_OPS = ["create_issue", "update_issue", "create_project", "add_to_project", "create_milestone"] as const;
+export type GithubOp = (typeof GITHUB_OPS)[number];
+
+/** A Gomon project. `_id` is a slug; the reserved "company" holds company-wide context, not a working project. */
+export type Project = {
+  _id: string; teamId: string; name: string; description?: string; status: "active" | "archived";
+  createdAt: Date; createdBy: string;
+  github?: { projectNumber: number; projectId: string; url: string };
+  synthetic?: boolean;
+};
+
 export type AuditEvent = {
   callId?: string; teamId: string; projectId: string;
   at: Date; type: string; actor: string; reason: string; ref?: Record<string, unknown>;
