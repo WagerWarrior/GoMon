@@ -107,9 +107,11 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   // Sound-alike wake detection (ASR never spells "Gomon"); the addressed utterance's speaker is the command actor.
   const wakes = batch.map((b) => ({ b, w: parseWake(b.text) })).filter((x) => x.w.addressed);
   const speaker = (wakes[wakes.length - 1]?.b ?? u).speaker.displayName;
+  // The fast lane (fast.ts) already answered questions addressed to Gomon; the batch then only records items and conflicts.
+  const fastAnswered = wakes.length > 0 && wakes.every((x) => x.b.fastReply === true);
   // Delayed acknowledgment for real requests (5+ words after the name): fires only if the answer takes longer than ACK_DELAY_MS.
   const ack: { timer?: NodeJS.Timeout; spoken: Promise<void> | null } = { spoken: null };
-  if (wakes.some((x) => x.w.rest.split(/\s+/).filter(Boolean).length >= 5)) {
+  if (!fastAnswered && wakes.some((x) => x.w.rest.split(/\s+/).filter(Boolean).length >= 5)) {
     ack.timer = setTimeout(() => { ack.spoken = say(ctx, u.callId, ACK_TEXT, "ack", "normal", u._id); }, ACK_DELAY_MS);
   }
 
@@ -271,7 +273,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   // 6. Direct answer when addressed (skip if a command already produced the response). Grounding is enforced, not just asked:
   //    a grounded reply is spoken only if it cites at least one source that was actually in its context, and every memory key it
   //    says out loud exists. Conversational replies (about the call itself) need no source. GitHub changes acknowledge themselves.
-  if (a.addressed && a.command.type === "none" && a.github.op === "none" && a.reply.trim()) {
+  if (!fastAnswered && a.addressed && a.command.type === "none" && a.github.op === "none" && a.reply.trim()) {
     let text = a.reply.trim();
     if (a.replyKind === "grounded") {
       const norm = (s: string) => s.trim().toUpperCase();

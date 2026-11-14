@@ -27,6 +27,7 @@ import { createProjectWithBoard } from "./projects.ts";
 import { COMPANY_PROJECT } from "./scope.ts";
 import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
+import { fastReply, wantsFastReply } from "./fast.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -181,15 +182,19 @@ async function postUtterance(b: Record<string, unknown>) {
   // Recall sourceKeys are recall:<botId>:<participantId>:<start>; the bot id lets Gomon post to the meeting chat.
   const botId = /^recall:([^:]+):/.exec(sourceKey)?.[1];
   const { seq, projectId } = await ensureCall(callId, { speaker: speakerName, botId });
+  const fast = wantsFastReply(text);
   const doc: Utterance = {
     callId, teamId: config.teamId, projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
     // Held by the ingesting worker: a stray or older worker sees it as claimed (they skip claimedAt) and never splits the call.
     claimedAt: new Date(), heldBy: WORKER_ID,
+    ...(fast ? { fastReply: true } : {}),
     ...(str(b.startedAt) ? { startedAt: new Date(String(b.startedAt)) } : {}), ...(str(b.endedAt) ? { endedAt: new Date(String(b.endedAt)) } : {}),
   };
   try {
     const r = await c.utterances.insertOne(doc);
+    // Questions to Gomon are answered now, not after the queue and the full analysis.
+    if (fast) void callCtx(callId).then((cx) => fastReply(cx, { _id: r.insertedId, callId, seq, text, speaker: doc.speaker })).catch((e) => console.error("[fast]", e instanceof Error ? e.message : e));
     return { status: 201, data: { utteranceId: String(r.insertedId), seq, duplicate: false } };
   } catch (e) {
     if (e instanceof MongoServerError && e.code === 11000) return { status: 200, data: { duplicate: true } };

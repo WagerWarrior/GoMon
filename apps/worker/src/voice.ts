@@ -10,7 +10,8 @@ import type { Say } from "./shapes.ts";
 const env = {
   elKey: () => process.env.ELEVENLABS_API_KEY ?? "",
   voice: () => process.env.ELEVENLABS_VOICE_ID || "JBFqnCBsd6RMkjVDRZzb",
-  model: () => process.env.VOICE_MODEL || "eleven_v4_turbo",
+  // Flash renders a line in ~0.5 s vs ~1.5 s for eleven_v4_turbo (more expressive); Recall needs the whole clip before playing.
+  model: () => process.env.VOICE_MODEL || "eleven_flash_v2_5",
   recallKey: () => process.env.RECALL_API_KEY ?? "",
   region: () => process.env.RECALL_REGION || "us-west-2",
 };
