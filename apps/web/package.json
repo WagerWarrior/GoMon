@@ -9,8 +9,8 @@
     "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "seed:dev": "tsx dev/seed.ts",
-    "sim": "tsx dev/sim.ts"
+    "seed:dev": "tsx dev/seed.mts",
+    "sim": "tsx dev/sim.mts"
   },
   "dependencies": {
     "mongodb": "^7.0.0",
