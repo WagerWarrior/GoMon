@@ -1,0 +1,13 @@
+[project]
+name = "recovery-agent-backend"
+version = "0.1.0"
+description = "Turn-based classifier/driver recovery agent. MongoDB is the source of truth. All data is simulated."
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "pymongo>=4.9"]
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

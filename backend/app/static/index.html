@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Recovery Desk</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--mute:#667085;--line:#e4e7ec;--ok:#067647;--bad:#b42318;--warn:#b54708;--acc:#0b5fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#171b22;--ink:#e8ebf0;--mute:#8b94a3;--line:#262c36;--ok:#47cd89;--bad:#f97066;--warn:#fdb022;--acc:#6aa1ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,system-ui,sans-serif}
+header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+h1{font-size:16px;margin:0}.tag{font-size:11px;border:1px solid var(--line);border-radius:99px;padding:2px 8px;color:var(--mute)}
+main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 20px;max-width:1200px;margin:auto}
+@media(max-width:760px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:0 0 8px}
+.big{font-size:26px;font-weight:650}.meta{color:var(--mute);font-variant-numeric:tabular-nums}
+.span{grid-column:1/-1}.state{font-weight:650}.resolved{color:var(--ok)}.awaiting_approval,.refresh_pending{color:var(--warn)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:8px 12px;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.4;cursor:not-allowed}
+input[type=text]{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);flex:1;min-width:0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.say{padding:10px 12px;border-left:3px solid var(--acc);background:var(--bg);border-radius:6px;margin-top:10px}
+.tl{list-style:none;margin:0;padding:0;font-size:12.5px;font-variant-numeric:tabular-nums}.tl li{padding:5px 0;border-top:1px solid var(--line)}
+code{font-size:12px;color:var(--mute)}.stale{color:var(--bad)}
+</style></head><body>
+<header><div class="row"><h1>Recovery Desk</h1><span class="tag">SIMULATED DATA · fictional flights</span><span class="tag" id="ver"></span></div>
+<div class="row"><button id="new">New incident HX101</button><button id="newack" title="Refresh ACKs but never applies">New (ACK-only display)</button><button id="reconnect" disabled>Reconnect</button></div></header>
+<main>
+<section class="card"><h2>Airline feed (source of truth)</h2><div class="big" id="src">—</div><div class="meta" id="srcm"></div></section>
+<section class="card"><h2>Airport display</h2><div class="big" id="disp">—</div><div class="meta" id="dispm"></div></section>
+<section class="card span"><h2>Incident <code id="iid"></code></h2>
+<div>State: <span class="state" id="state">—</span></div><div class="meta" id="cmd"></div>
+<div class="row" style="margin-top:10px"><input type="text" id="q" value="Can I close this incident?" aria-label="Ask"><button id="ask" disabled>Ask</button>
+<button id="approve" class="primary" disabled>Approve refresh</button><button id="reject" disabled>Reject</button><button id="verify" disabled>Verify</button></div>
+<div class="say" id="say" hidden></div></section>
+<section class="card"><h2>Decision receipts (MongoDB: decisions)</h2><ul class="tl" id="dec"></ul></section>
+<section class="card"><h2>Evidence timeline (MongoDB: observations, commands)</h2><ul class="tl" id="ev"></ul></section>
+</main>
+<script>
+let iid=null,V=null;const $=i=>document.getElementById(i);
+const j=async(u,b)=>{const r=await fetch(u,b?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}:{});const d=await r.json();if(!r.ok)throw new Error(d.detail||r.status);return d};
+const fmt=o=>o&&o.status?`${o.status} · ${o.sourceTime}`:'unavailable';const meta=o=>o&&o.status?`source version ${o.sourceVersion}`:'';
+const t=ms=>new Date(ms).toLocaleTimeString([], {hour12:false});
+async function load(){if(!iid)return;V=await j('/api/incidents/'+iid);const i=V.incident,s=V.simulator;
+$('iid').textContent=i._id;$('state').textContent=i.state.replace('_',' ');$('state').className='state '+i.state;
+$('ver').textContent='router '+i.classifierVersion+' (untrained bootstrap)';
+$('src').textContent=fmt(s.source);$('srcm').textContent=meta(s.source);
+const stale=s.display.sourceVersion!==s.source.sourceVersion;$('disp').textContent=s.display.connection==='up'?fmt(s.display):'connection down';
+$('disp').className='big '+(stale?'stale':'');$('dispm').textContent=meta(s.display)+(s.display.connection==='up'?'':' · cannot read');
+const c=i.command;$('cmd').textContent=c?`Command ${c.commandId}: ${c.status}${i.state==='refresh_pending'&&c.status==='acked'?' — verification pending':i.state==='resolved'?' — verified by fresh post-ACK reads':''}`:'No command sent';
+const ap=i.approval,pend=i.state==='awaiting_approval'&&ap&&ap.status==='pending';
+$('approve').disabled=!pend;$('reject').disabled=!pend;$('ask').disabled=false;$('verify').disabled=i.state!=='refresh_pending';$('reconnect').disabled=false;
+$('dec').innerHTML=V.decisions.slice().reverse().map(d=>`<li><b>${d.route}</b> <code>${d.reason}</code><br><code>${d.classifierVersion} · p=${d.probability??'uncalibrated'} · ${d.latencyMs}ms${d.gateOverride?' · gate override':''}</code></li>`).join('')||'<li class="meta">None yet</li>';
+const ev=[...V.observations.map(o=>[o.observedAt,`Read ${o.system}: ${o.available?o.status+' '+o.sourceTime+' v'+o.sourceVersion:'UNAVAILABLE'}`]),
+...V.commands.map(c=>[c.intentAt,`Command intent ${c.commandId} (${c.status})`]),...V.effects.map(e=>[e.at,`Simulator applied effect: ${e.applied}`])].sort((a,b)=>b[0]-a[0]);
+$('ev').innerHTML=ev.map(e=>`<li>${t(e[0])} ${e[1]}</li>`).join('')}
+async function start(mode){const r=await j('/api/incidents',{flightId:'HX101',applyMode:mode});iid=r._id;$('say').hidden=true;await load()}
+$('new').onclick=()=>start('applies');$('newack').onclick=()=>start('ack_only');
+$('reconnect').onclick=async()=>{await j(`/api/incidents/${iid}/reconnect`,{});load()};
+const say=r=>{$('say').hidden=false;$('say').textContent=r.response+`   [${r.routes.join(' → ')} · driver calls: ${r.driverCalls} · ${r.latencyMs}ms]`};
+async function ask(text){say(await j(`/api/incidents/${iid}/turns`,{text}));load()}
+$('ask').onclick=()=>ask($('q').value);$('verify').onclick=()=>ask('Verify the refresh');$('q').onkeydown=e=>{if(e.key==='Enter'&&!$('ask').disabled)ask($('q').value)};
+const dec=p=>async()=>{try{await j(`/api/incidents/${iid}/${p}`,{supervisor:'supervisor-demo',approvalId:V.incident.approval.approvalId})}catch(e){alert(e.message)}load()};
+$('approve').onclick=dec('approve');$('reject').onclick=dec('reject');
+</script></body></html>
