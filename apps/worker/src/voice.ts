@@ -24,7 +24,9 @@ const STALE_MS = 20_000;
 /** Unprompted lines (conflicts) wait until nobody has finished a sentence for this long. */
 const FLOOR_QUIET_MS = 1500;
 const UNPROMPTED: ReadonlySet<Say["reason"]> = new Set(["conflict", "already_decided", "suggestion"]);
-const cache = new Map<string, Buffer>();
+/** Rendered or rendering clips by voice+model+text. Short stock lines stay; other lines stay 30 s (long enough for prerender -> speak). */
+const cache = new Map<string, Promise<Buffer>>();
+const CLIP_KEEP_MS = 30_000;
 const sound = (name: string) => readFileSync(new URL(`../public/sounds/${name}.mp3`, import.meta.url));
 /** Two rising tones, 0.36 s: "I heard my name, working on it". */
 const CHIME = sound("heard");
@@ -44,15 +46,43 @@ export async function ttsMp3(text: string, voiceId?: string): Promise<Buffer> {
   const key = `${voice}|${env.model()}|${text}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_64`, {
-    method: "POST",
-    headers: { "xi-api-key": env.elKey(), "content-type": "application/json", accept: "audio/mpeg" },
-    body: JSON.stringify({ text, model_id: env.model() }),
-  });
-  if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const mp3 = Buffer.from(await res.arrayBuffer());
-  if (text.length <= 40) cache.set(key, mp3); // short stock lines ("On it.") are reused
-  return mp3;
+  const p = (async () => {
+    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_64`, {
+      method: "POST",
+      headers: { "xi-api-key": env.elKey(), "content-type": "application/json", accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: env.model() }),
+    });
+    if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return Buffer.from(await res.arrayBuffer());
+  })();
+  cache.set(key, p);
+  p.catch(() => cache.delete(key)); // a failed render is tried again
+  if (text.length > 40) setTimeout(() => cache.delete(key), CLIP_KEEP_MS).unref?.(); // short stock lines ("On it.") are kept
+  return p;
+}
+
+/**
+ * Start rendering a line the moment its text exists, before it is written to Atlas and comes back on the change stream.
+ * The speaker then finds the clip ready or already on its way (saves the insert, the stream hop and the bot lookup).
+ */
+export function prerender(text: string, voiceId?: string): void {
+  if (voiceOn) void ttsMp3(text, voiceId).catch(() => {});
+}
+
+/**
+ * Node drops idle connections after ~4 s, so each question paid a fresh TLS handshake to the model and the voice API.
+ * A tiny request every 3 s while the worker speaks keeps both connections open. Unauthenticated, costs nothing.
+ */
+function keepWarm(): () => void {
+  const ping = () => {
+    for (const url of ["https://api.anthropic.com/", "https://api.elevenlabs.io/"]) {
+      void fetch(url, { method: "HEAD", signal: AbortSignal.timeout(2500) }).then((r) => r.body?.cancel()).catch(() => {});
+    }
+  };
+  ping();
+  const t = setInterval(ping, 3000);
+  t.unref?.();
+  return () => clearInterval(t);
 }
 
 export async function playInMeeting(botId: string, mp3: Buffer): Promise<void> {
@@ -179,6 +209,10 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
   });
   voiceOn = true;
   void ttsMp3("On it.").catch(() => {}); // warm the cache for the instant acknowledgment
+  const stopWarm = keepWarm();
   log(`[voice] speaking through Recall output_audio (model ${env.model()})`);
-  return () => cs.close();
+  return () => {
+    stopWarm();
+    return cs.close();
+  };
 }

@@ -12,6 +12,7 @@ import { postToMeetingChat, resolveLink } from "./links.ts";
 import { workspaceFor, type Workspace } from "./context.ts";
 import { maybeRefreshSummary } from "./summary.ts";
 import { showCard } from "./card.ts";
+import { prerender } from "./voice.ts";
 import { memoryFilter } from "./scope.ts";
 import { handleGithubIntent } from "./github-intent.ts";
 import { gateToWake } from "./floor.ts";
@@ -47,6 +48,8 @@ async function timing(ctx: Ctx, callId: string, stage: string, ms: number, utter
 /** Gomon's speech goes through Atlas: the bot page streams `says` (GET /api/says/stream) and acks each one. */
 export async function say(ctx: Ctx, callId: string, text: string, reason: Say["reason"], priority: Say["priority"] = "normal", utteranceId?: ObjectId): Promise<void> {
   const now = new Date();
+  // Answers to a question start rendering now, while the row is written and travels back on the change stream.
+  if (reason === "addressed") prerender(text, ctx.voiceId);
   await ctx.c.says.insertOne({ sayId: randomUUID(), callId, teamId: ctx.teamId, projectId: ctx.projectId, text, priority, reason, status: "queued", createdAt: now, updatedAt: now, utteranceId, ...(ctx.voiceId ? { voiceId: ctx.voiceId } : {}) });
 }
 

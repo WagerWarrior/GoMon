@@ -36,7 +36,34 @@ async function githubIssues(): Promise<WorkspaceSource[]> {
   return issueCache.items;
 }
 
-export async function workspaceFor(ctx: Ctx, callId: string): Promise<Workspace> {
+/**
+ * The workspace section does not depend on the question, and it is the slowest and most variable read on the answer path
+ * (200-1100 ms: five queries, then a sixth). It is kept per call for 10 s; a copy older than 3 s is handed out at once and
+ * refreshed in the background, so an answer never waits for it after the first one.
+ */
+const workspaces = new Map<string, { at: number; p: Promise<Workspace>; refreshing?: boolean }>();
+export function workspaceFor(ctx: Ctx, callId: string): Promise<Workspace> {
+  const key = `${ctx.teamId}|${ctx.projectId}|${callId}`;
+  const load = () => {
+    const e = { at: Date.now(), p: loadWorkspace(ctx, callId) };
+    e.p.then(() => workspaces.set(key, e), () => { if (workspaces.get(key) === e) workspaces.delete(key); });
+    return e;
+  };
+  const hit = workspaces.get(key);
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (!hit || age > 10_000) {
+    const e = load();
+    workspaces.set(key, e);
+    return e.p;
+  }
+  if (age > 3000 && !hit.refreshing) {
+    hit.refreshing = true;
+    load();
+  }
+  return hit.p;
+}
+
+async function loadWorkspace(ctx: Ctx, callId: string): Promise<Workspace> {
   // Previous calls and locks come from this project and company context (contract 1); counts likewise.
   const scope = { teamId: ctx.teamId, projectId: { $in: readableProjects(ctx.projectId) } };
   const [call, previous, recentLocks, kinds, issues] = await Promise.all([
