@@ -3,7 +3,18 @@
 Owner: Max. Written for Rob's and Tamir's agents to read and reconcile against.
 Updated: 2026-11-14 (after Rob's worker landed). The spec (`spec.md`) wins on conflict.
 
-## One system now
+## For Tamir (and his agents): barge-in decision needed (2026-11-14)
+Gomon talks over people in Meet: the bot only hears finished sentences, and `cancel` never stops the current line.
+Plan with research and four slices: `docs/listening-behaviour-plan.md`. Slice 1 is built as **draft PR #14**
+(`feat/barge-in`, `apps/bot-page` only, 38/38 tests pass, not yet tried in a live Meet).
+- **What it does:** subscribes to Recall `participant_events.speech_on`. A person starting to talk sends `stop` to the page,
+  which pauses the audio and acks `cancelled`. The bot's own participant (`BOT_NAME=Gomon`) is ignored. `BARGE_IN=0` turns it off.
+- **Decide one of:** (a) take it now: review #14, run one live Meet, merge; (b) not now: Max stops and nothing in
+  `apps/bot-page` changes before the 5 PM submission. Max's lane touches nothing else in `apps/bot-page` until you answer.
+- **Open questions for a live call:** does Recall report the bot as a speaker named "Gomon"? How long from a person
+  starting to talk until the audio stops?
+- Slices 3 (visible searching state) and 4 (spoken replies must cite a memory key) are in `apps/worker` (Rob's lane) and wait for both of you.
+
 Everything runs on the shared Atlas cluster, database **`gomon`** (Rob's setup + seed). `gomon_max` was Max's
 scratch database and is no longer used.
 
