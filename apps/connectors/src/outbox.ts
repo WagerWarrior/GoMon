@@ -88,9 +88,14 @@ async function send(d: Db, a: Action, env: Env): Promise<Sent> {
 /** Best-effort read-back. A failure here never un-sends; it only withholds the "confirmed" upgrade. */
 async function confirm(d: Db, a: Action, sent: Sent, env: Env) {
   try {
-    if (a.type !== "create_issue") return;
-    if (await github.confirmIssue(env, sent.externalId, a.idempotencyKey))
-      await d.collection("actions").updateOne({ _id: a._id, status: "sent" }, { $set: { status: "confirmed", confirmedAt: new Date() } });
+    let seen = false;
+    if (a.type === "create_issue") seen = await github.confirmIssue(env, sent.externalId, a.idempotencyKey);
+    else if (a.type === "post_slack") {
+      const call: any = await d.collection("calls").findOne({ _id: a.callId as any });
+      const hit = await slack.findMessage(env, a.idempotencyKey, call?.slackThreadTs);
+      seen = hit?.externalId === sent.externalId;
+    }
+    if (seen) await d.collection("actions").updateOne({ _id: a._id, status: "sent" }, { $set: { status: "confirmed", confirmedAt: new Date() } });
   } catch { /* leave as sent */ }
 }
 

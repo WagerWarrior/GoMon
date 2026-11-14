@@ -96,7 +96,7 @@ test("Slack: one thread per call (root once, then replies), metadata carries the
     assert.equal(roots.length, 1, "exactly one thread root"); assert.equal(replies.length, 2);
     assert.ok(replies.every((m) => m.thread_ts === roots[0].ts));
     const call: any = await d.collection("calls").findOne({ _id: "call-1" as any }); assert.equal(call.slackThreadTs, roots[0].ts);
-    const done1 = await get(d, a1); assert.equal(done1.status, "sent"); assert.match(done1.externalId, /^C1:\d+\.\d+$/);
+    const done1 = await get(d, a1); assert.equal(done1.status, "confirmed", "read back from the thread by metadata"); assert.match(done1.externalId, /^C1:\d+\.\d+$/);
     assert.equal(replies.find((m) => m.text.startsWith("Decision"))!.metadata.event_payload.idempotencyKey, done1.idempotencyKey);
   } finally { await sl.close(); await done(); }
 });
@@ -146,4 +146,16 @@ test("works under the spec's actions validator: 'sent' requires policyCheck.allo
     assert.ok(["sent", "confirmed"].includes((await get(d, id)).status));
     await assert.rejects(d.collection("actions").updateOne({ _id: id }, { $set: { "policyCheck.allowed": false } }), /validation/i); // positive control: the validator really bites
   } finally { await gh.close(); await done(); }
+});
+
+test("Slack read-back that cannot see the message leaves the action 'sent', never confirmed", async () => {
+  const { d, done } = await freshDb(); const sl = await fakeSlack();
+  try {
+    const id = await queue(d, "post_slack"); await processAction(d, id, envFor(undefined, sl.url));
+    assert.equal((await get(d, id)).status, "confirmed");
+    sl.state.msgs.length = 0; // message vanished (deleted, or the bot cannot read the channel)
+    const id2 = await queue(d, "post_slack", { payload: { text: "Another" } });
+    sl.state.hideReads = true; await processAction(d, id2, envFor(undefined, sl.url));
+    assert.equal((await get(d, id2)).status, "sent");
+  } finally { await sl.close(); await done(); }
 });

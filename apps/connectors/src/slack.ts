@@ -41,3 +41,9 @@ export async function postMessage(env: Env, text: string, key: string, threadTs?
   const json = await api(env, "chat.postMessage", { channel, text, ...(threadTs ? { thread_ts: threadTs } : {}), metadata: META(key), unfurl_links: false }, true);
   return { externalId: `${json.channel ?? channel}:${json.ts}`, ts: json.ts };
 }
+
+/** Join the configured public channel so read-back (history/replies) works. Needs the channels:join scope; best effort. */
+export async function joinChannel(env: Env): Promise<string> {
+  try { const { channel } = cfg(env); await api(env, "conversations.join", { channel }, false); return "joined"; }
+  catch (e: any) { return `not joined (${e?.message ?? e})`; }
+}

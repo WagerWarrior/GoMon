@@ -45,12 +45,13 @@ export function fakeGithub() {
   return start(srv, s);
 }
 export function fakeSlack() {
-  const s = { msgs: [] as Json[], posts: 0, failAfterApply: 0, error: "" };
+  const s = { msgs: [] as Json[], posts: 0, failAfterApply: 0, error: "", hideReads: false };
   const srv = http.createServer((req, res) => {
     let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
       const send = (j: Json, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(j)); };
       const j = body ? JSON.parse(body) : {}; const method = req.url!.split("/").pop();
       if (s.error) return send({ ok: false, error: s.error });
+      if (s.hideReads && method!.startsWith("conversations.")) return send({ ok: false, error: "not_in_channel" });
       if (method === "chat.postMessage") {
         s.posts++; const ts = `${1700000000 + s.msgs.length}.000100`;
         s.msgs.push({ ts, text: j.text, thread_ts: j.thread_ts, metadata: j.metadata, channel: j.channel });
