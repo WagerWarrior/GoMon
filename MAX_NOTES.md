@@ -3,6 +3,24 @@
 Owner: Max. Written for Rob's and Tamir's agents to read and reconcile against.
 Updated: 2026-11-14 (after Rob's worker landed). The spec (`spec.md`) wins on conflict.
 
+## For Rob: floor fixes from Max's live test, 59dbd2a (16:20). Needs a worker restart + ears/session page reload
+Max ran the demo and Gomon answered without its name. Evidence (call-202611142054-291b, `says` joined to their utterance):
+"How can we resolve the EU residency question?", "What do you think we should do?" and "Thank you. How is it like?" got
+`addressed` replies with no wake word (the analysis model set `addressed`), and the follow-up window answered "Is that a larf? Yeah, it".
+1. **Wake word only** (`apps/worker/src/floor.ts` `gateToWake`, called in `agent.ts`): without a wake word in the batch the
+   model's reply, command and GitHub op are dropped; items, conflicts, agreement and "wait" vetoes are untouched. The follow-up
+   window is off by default; `FOLLOW_UP_MS=20000` turns it back on. The demo script says "Hey Gomon" on every line, so it is unaffected.
+2. **Chime on wake** (`voice.ts` `heard`, called at ingest in `main.ts`): 0.36 s two-tone mp3 (`public/sounds/heard.mp3`) through
+   Recall output_audio before any model call, Thinking card, `agentState.detail` "heard Rob, checking team memory", timing
+   stage `wake_to_chime`. `HEARD_CHIME=off` disables the sound. Only with `VOICE_OUT=recall`.
+3. **Barge-in** (`voice.ts` `stopSpeaking`, `floor.ts` `bargeIn`): "stop", 5+ words over Gomon, or 1.2 s of talk cuts the clip
+   with Recall `DELETE /bot/{id}/output_audio/` (the endpoint answers 404 for an unknown bot and allows DELETE; a silent clip
+   is the fallback), cancels waiting lines, writes `agent_events.kind: "barge_in"`. `/ears/partial` carries partial text from
+   `public/ears.html` and the in-app `Listen.tsx` (proxy allows `partial`). Gomon's own voice is excluded by word overlap.
+Verified: worker typecheck 0, `npm test` 10/10 (new `test/floor.test.ts`), web typecheck 0. **Not verified live**: I did not
+start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
+real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
+
 ## For Tamir (and his agents): barge-in decision needed (2026-11-14)
 Gomon talks over people in Meet: the bot only hears finished sentences, and `cancel` never stops the current line.
 Plan with research and four slices: `docs/listening-behaviour-plan.md`. Slice 1 is built as **draft PR #14**
