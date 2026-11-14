@@ -242,6 +242,37 @@ async function createMilestone(env: Env, a: Action): Promise<Sent> {
   return { externalId: `${repo}:milestone/${m.number}:${a.idempotencyKey}`, externalUrl: m.html_url };
 }
 
+/**
+ * write_doc: commit a markdown record to a side branch (default "gomon-records", created from the default branch), never to
+ * the default branch the team pushes to. The idempotency marker sits at the end of the file, so a retry after an
+ * ambiguous failure reads the file back and adopts the earlier write instead of committing twice.
+ */
+const enc = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+async function readFile(env: Env, repo: string, path: string, branch: string) {
+  const r = await call(env, "GET", `/repos/${repo}/contents/${enc(path)}?ref=${encodeURIComponent(branch)}`);
+  if (r.res.status === 404) return null;
+  if (!r.res.ok) classify(r.res, r.json, r.text, "read file");
+  return { sha: String(r.json.sha), text: Buffer.from(String(r.json.content ?? ""), "base64").toString(), url: r.json.html_url as string | undefined };
+}
+async function writeDoc(env: Env, a: Action): Promise<Sent> {
+  const { repo } = cfg(env); const p = a.payload; const branch = String(p.branch || "gomon-records");
+  if (!p.path || typeof p.content !== "string") throw new Permanent("write_doc: path and content are required");
+  const head = await call(env, "GET", `/repos/${repo}/git/ref/heads/${enc(branch)}`);
+  if (head.res.status === 404) {
+    const main = (await rest(env, "GET", `/repos/${repo}`, undefined, "read repo")).default_branch;
+    if (main === branch) throw new Permanent("write_doc: refusing to write to the default branch");
+    const base = (await rest(env, "GET", `/repos/${repo}/git/ref/heads/${enc(main)}`, undefined, "read default branch")).object.sha;
+    const r = await call(env, "POST", `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: base });
+    if (!r.res.ok && r.res.status !== 422) classify(r.res, r.json, r.text, "create branch"); // 422 = another worker made it
+  } else if (!head.res.ok) classify(head.res, head.json, head.text, "read branch");
+  const id = `${repo}:${branch}:${p.path}:${a.idempotencyKey}`;
+  const cur = await readFile(env, repo, String(p.path), branch);
+  if (cur?.text.includes(MARK(a.idempotencyKey))) return { externalId: id, externalUrl: cur.url, note: "adopted earlier write" };
+  const content = `${p.content.trimEnd()}\n\n${MARK(a.idempotencyKey)}\n`;
+  const j = await rest(env, "PUT", `/repos/${repo}/contents/${enc(String(p.path))}`, { message: String(p.message || `gomon: ${p.path}`).slice(0, 200), content: Buffer.from(content).toString("base64"), branch, ...(cur ? { sha: cur.sha } : {}) }, "write file");
+  return { externalId: id, externalUrl: j?.content?.html_url };
+}
+
 /** Outbox type "github" (contract 6): one op per action. */
 export async function sendGithub(d: Db, env: Env, a: Action): Promise<Sent> {
   switch (a.payload.op) {
@@ -250,6 +281,7 @@ export async function sendGithub(d: Db, env: Env, a: Action): Promise<Sent> {
     case "create_project": return createBoard(d, env, a);
     case "add_to_project": return addIssueToProject(d, env, a);
     case "create_milestone": return createMilestone(env, a);
+    case "write_doc": return writeDoc(env, a);
     default: throw new Permanent(`unknown github op ${a.payload.op}`);
   }
 }
@@ -273,6 +305,7 @@ export async function confirmGithub(d: Db, env: Env, a: Action, sent: Sent): Pro
     const data = await gql(env, `query($id:ID!){ node(id:$id) { ... on ProjectV2 { title } } }`, { id: proj.github.projectId }, "read board");
     return typeof data?.node?.title === "string";
   }
+  if (p.op === "write_doc") return !!(await readFile(env, repo, String(p.path), String(p.branch || "gomon-records")))?.text.includes(MARK(a.idempotencyKey));
   if (p.op === "create_milestone") {
     const n = /milestone\/(\d+)/.exec(sent.externalId)?.[1];
     const { res, json } = await call(env, "GET", `/repos/${repo}/milestones/${n}`);

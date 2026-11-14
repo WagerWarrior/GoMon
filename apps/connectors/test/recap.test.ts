@@ -92,3 +92,29 @@ test("an empty-but-real call still reads cleanly", async () => {
     assert.deepEqual(r.counts, { decisions: 0, tasks: 0, changes: 0, actions: 0, questions: 0, conflicts: 0, filed: 0 });
   } finally { await done(); }
 });
+
+import { fakeGithub } from "./fakes";
+import { processAction } from "../src/outbox";
+const envFor = (gh: string) => ({ GITHUB_TOKEN: "t", GITHUB_REPO: "org/repo", GITHUB_API_URL: gh });
+
+test("the recap also files a design record on the gomon-records branch (never main), once, even after an ambiguous failure", async () => {
+  const { d, done } = await freshDb(); const gh = await fakeGithub();
+  try {
+    await endedCall(d); await record(d);
+    await sweepRecaps(d);
+    const doc: any = await d.collection("actions").findOne({ type: "github" });
+    assert.equal(doc.idempotencyKey, "doc:call-1");
+    assert.equal(doc.payload.op, "write_doc"); assert.equal(doc.payload.branch, "gomon-records");
+    assert.match(doc.payload.path, /^calls\/\d{4}-\d{2}-\d{2}-call-1\.md$/);
+    assert.match(doc.payload.content, /^# Rate limits/); assert.match(doc.payload.content, /\*\*Decided\*\*/); assert.match(doc.payload.content, /^- D-16/m);
+    gh.state.failWriteAfterApply = 1; // GitHub applied the commit, then the response failed
+    assert.equal(await processAction(d, doc._id, envFor(gh.url)), "requeued");
+    await d.collection("actions").updateOne({ _id: doc._id }, { $set: { nextAttemptAt: new Date(0) } });
+    assert.equal(await processAction(d, doc._id, envFor(gh.url)), "sent");
+    assert.equal(gh.state.fileWrites, 1, "the retry adopted the applied write instead of committing twice");
+    assert.equal(gh.state.refs.main, "sha-main"); assert.ok(gh.state.refs["gomon-records"], "branch created from main");
+    assert.ok(!Object.keys(gh.state.files).some((k) => k.startsWith("main:")), "nothing written to main");
+    const a: any = await d.collection("actions").findOne({ _id: doc._id });
+    assert.equal(a.status, "confirmed"); assert.match(a.externalUrl, /blob\/calls\//);
+  } finally { await gh.close(); await done(); }
+});

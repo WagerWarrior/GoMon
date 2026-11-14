@@ -32,6 +32,8 @@ export function fakeGithub() {
     boards: [] as Json[], items: [] as Json[], links: [] as Json[], failCreateBoardAfterApply: 0, boardCreates: 0,
     /** Logins GitHub knows; others are silently dropped by the add-assignees endpoint (like real GitHub). null = all. */
     knownLogins: null as string[] | null,
+    /** Git data + contents API: branch -> head sha, "branch:path" -> file. */
+    refs: { main: "sha-main" } as Record<string, string>, files: {} as Record<string, { content: string; sha: string }>, fileWrites: 0, failWriteAfterApply: 0,
   };
   const srv = http.createServer((req, res) => {
     let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -78,6 +80,24 @@ export function fakeGithub() {
         s.comments.push(c);
         if (s.failCommentAfterApply > 0) { s.failCommentAfterApply--; return send(502, { message: "bad gateway" }); }
         return send(201, c);
+      }
+      const repoGet = /^\/repos\/[^/]+\/[^/]+$/.exec(url);
+      if (repoGet && req.method === "GET") return send(200, { default_branch: "main" });
+      const ref = /\/git\/ref\/heads\/(.+)$/.exec(url);
+      if (ref && req.method === "GET") { const sha = s.refs[decodeURIComponent(ref[1])]; return sha ? send(200, { object: { sha } }) : send(404, { message: "Not Found" }); }
+      if (/\/git\/refs$/.test(url) && req.method === "POST") { const b = String(j.ref).replace("refs/heads/", ""); if (s.refs[b]) return send(422, { message: "Reference already exists" }); s.refs[b] = j.sha; return send(201, { ref: j.ref }); }
+      const ct = /\/contents\/([^?]+)(\?ref=(.+))?$/.exec(url);
+      if (ct) {
+        const path = decodeURIComponent(ct[1]);
+        if (req.method === "GET") { const f = s.files[`${decodeURIComponent(ct[3] ?? "main")}:${path}`]; return f ? send(200, { sha: f.sha, content: Buffer.from(f.content).toString("base64"), html_url: `http://gh.test/blob/${path}` }) : send(404, { message: "Not Found" }); }
+        if (req.method === "PUT") {
+          const k = `${j.branch}:${path}`; const cur = s.files[k];
+          if (!s.refs[j.branch]) return send(404, { message: "Branch not found" });
+          if (cur && cur.sha !== j.sha) return send(409, { message: "sha mismatch" });
+          s.fileWrites++; const sha = `f${s.fileWrites}`; s.files[k] = { content: Buffer.from(j.content, "base64").toString(), sha };
+          if (s.failWriteAfterApply > 0) { s.failWriteAfterApply--; return send(502, { message: "bad gateway" }); }
+          return send(cur ? 200 : 201, { content: { sha, html_url: `http://gh.test/blob/${path}` }, commit: { sha: `c${s.fileWrites}` } });
+        }
       }
       send(404, { message: "no route" });
     });
