@@ -13,8 +13,9 @@
   html, body { margin:0; height:100%; color:var(--fg); font: 16px/1.4 "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
     background: radial-gradient(70vmax 50vmax at 50% -10%, rgba(31,157,85,.18), transparent 70%),
                 radial-gradient(50vmax 40vmax at 100% 100%, rgba(125,220,170,.14), transparent 70%), var(--bg); }
-  main { height:100%; display:grid; place-items:center; padding:5vh 6vw; }
-  .card { width:auto; max-width:1100px; display:grid; grid-template-columns: auto minmax(0,1fr); align-items:center; gap:6vmin; }
+  /* Meet crops a tile's left and right edges to fill its space, so everything stays in the middle 70% of the frame. */
+  main { height:100%; display:grid; place-items:center; padding:5vh 15vw; }
+  .card { width:auto; max-width:70vw; display:grid; grid-template-columns: auto minmax(0,1fr); align-items:center; gap:6vmin; }
   .stage { position:relative; width:42vmin; aspect-ratio:1; }
   #face { position:absolute; inset:0; }
   .ring { position:absolute; inset:-4%; width:108%; height:108%; transform:rotate(-90deg); opacity:0; transition:opacity .3s; }
@@ -111,17 +112,95 @@
     playNext();
   });
 
-  const es = new EventSource("/say/stream" + location.search); // ?callId= scopes this page to one call
-  es.onopen = () => { document.body.classList.remove("offline"); setFace("listening"); setStatus("listening"); };
-  es.onerror = () => { document.body.classList.add("offline"); setFace("vetoed"); setStatus("reconnecting…"); };
-  es.addEventListener("say", (ev) => {
-    const item = JSON.parse(ev.data);
+  // Long-poll for things to say. (Server-sent events are buffered by some tunnels, Cloudflare quick tunnels among them.)
+  const params = new URLSearchParams(location.search); // ?callId= scopes this page to one call
+  params.set("client", (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`));
+  let online = false;
+  function setOnline(on) {
+    if (on === online) return;
+    online = on;
+    document.body.classList.toggle("offline", !on);
+    if (!current) setFace(on ? "listening" : "vetoed");
+    setStatus(on ? (current ? "speaking" : "listening") : "reconnecting…");
+  }
+  function onEvent(event, item) {
+    if (event === "reload") return location.reload();
+    if (event === "cancel") return queue.splice(0).forEach((q) => ack(q.sayId, "cancelled"));
+    if (event !== "say") return;
     // A high-priority line (someone addressed Gomon) cancels anything not yet spoken.
     if (item.priority === "high") queue.splice(0).forEach((q) => ack(q.sayId, "cancelled"));
     queue.push(item);
     playNext();
-  });
-  es.addEventListener("cancel", () => queue.splice(0).forEach((q) => ack(q.sayId, "cancelled")));
+  }
+  (async function poll() {
+    for (;;) {
+      try {
+        const r = await fetch("/say/poll?" + params, { cache: "no-store" });
+        if (!r.ok) throw new Error(`poll ${r.status}`);
+        const { events } = await r.json();
+        setOnline(true);
+        for (const e of events) onEvent(e.event, e.data);
+      } catch {
+        setOnline(false);
+        await new Promise((ok) => setTimeout(ok, 1000));
+      }
+    }
+  })();
+
+  // ?calibrate=1 draws a test pattern over the page: a border, corner labels and a centre mark, to see how a
+  // meeting crops or scales the bot's camera.
+  if (new URLSearchParams(location.search).get("calibrate")) {
+    const o = document.createElement("div");
+    o.style.cssText = "position:fixed;inset:0;border:10px solid #e11d48;pointer-events:none;z-index:9;font:700 40px/1 system-ui,sans-serif;color:#111";
+    const tag = (text, css) => `<span style="position:absolute;${css};background:#fde047;padding:6px 12px">${text}</span>`;
+    o.innerHTML = tag("TOP LEFT", "left:0;top:0") + tag("TOP RIGHT", "right:0;top:0") + tag("BOTTOM LEFT", "left:0;bottom:0") +
+      tag("BOTTOM RIGHT", "right:0;bottom:0") + tag("CENTRE 1280x720", "left:50%;top:50%;transform:translate(-50%,-50%)") +
+      '<i style="position:absolute;left:50%;top:0;bottom:0;border-left:2px dashed #e11d48"></i><i style="position:absolute;top:50%;left:0;right:0;border-top:2px dashed #e11d48"></i>';
+    document.body.appendChild(o);
+  }
+
+  // Tell the server what this browser actually laid out. Recall's bot browser is not the one we design in.
+  // The avatar sizes itself in container units (cqw). Measure what 10cqw is here and where its parts ended up.
+  function avatarProbe() {
+    const scene = document.querySelector("[data-avatar-scene]");
+    if (!scene) return null;
+    const p = document.createElement("div");
+    p.style.cssText = "position:absolute;left:0;top:0;width:10cqw;height:1px;visibility:hidden";
+    scene.appendChild(p);
+    const tenCqw = Math.round(p.getBoundingClientRect().width * 10) / 10;
+    p.remove();
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity, n = 0;
+    scene.querySelectorAll("*").forEach((el) => { const x = el.getBoundingClientRect(); if (!x.width && !x.height) return; n++;
+      l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom); });
+    const sup = (prop, v) => (window.CSS && CSS.supports ? CSS.supports(prop, v) : null);
+    return { tenCqw, expected: Math.round(scene.getBoundingClientRect().width) / 10, parts: n, partsBox: [l, t, r - l, b - t].map(Math.round),
+      supportsCq: sup("width", "1cqw"), supportsContainer: sup("container-type", "size"),
+      sceneContainer: getComputedStyle(scene).containerType };
+  }
+  function faceDom() {
+    const f = document.getElementById("face"), c = f && f.firstElementChild;
+    if (!c) return null;
+    const root = c.shadowRoot || c;
+    const kids = [...root.querySelectorAll("*")].slice(0, 400);
+    const tags = {}; kids.forEach((k) => { tags[k.tagName.toLowerCase()] = (tags[k.tagName.toLowerCase()] || 0) + 1; });
+    return { tag: c.tagName.toLowerCase(), shadow: Boolean(c.shadowRoot), attrs: [...c.attributes].map((x) => `${x.name}=${x.value.slice(0, 90)}`),
+      tags, html: (c.shadowRoot ? c.shadowRoot.innerHTML : c.outerHTML).slice(0, 700) };
+  }
+  const report = (when) => {
+    const box = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map(Math.round); };
+    const q = (sel) => document.querySelector(sel);
+    fetch("/page/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      when, callId: new URLSearchParams(location.search).get("callId"), ua: navigator.userAgent,
+      inner: [innerWidth, innerHeight], doc: [document.documentElement.clientWidth, document.documentElement.clientHeight],
+      screen: [screen.width, screen.height], dpr: devicePixelRatio, zoom: window.visualViewport ? visualViewport.scale : null,
+      main: box(q("main")), card: box(q(".card")), stage: box(q(".stage")), face: box(q("#face")),
+      faceChild: box(q("#face") && q("#face").firstElementChild), h1: box(q("h1")), status: box(q("#status")),
+      stageWidth: getComputedStyle(q(".stage")).width, mainDisplay: getComputedStyle(q("main")).display,
+      bodyBg: getComputedStyle(document.body).backgroundImage.slice(0, 40), fonts: document.fonts ? document.fonts.status : null,
+      cq: avatarProbe(), faceDom: faceDom(),
+    }) }).catch(() => {});
+  };
+  report("load"); setTimeout(() => report("3s"), 3000);
 })();
 </script>
 </body>

@@ -3,7 +3,9 @@
 //   POST /recall/webhook/  Recall real-time transcript events -> POST /api/utterances
 //   POST /say              worker -> { sayId?, text, priority?, callId? }  (SSE to that call's page, or all pages)
 //   POST /say/cancel       drop queued, unspoken output
-//   GET  /say/stream       SSE to the bot page
+//   GET  /say/poll         long-poll for the bot page (works through proxies that buffer SSE, e.g. Cloudflare quick tunnels)
+//   GET  /say/stream       SSE alternative for clients that can use it
+//   POST /page/reload      make connected pages reload themselves (pick up a new page without re-creating the bot)
 //   POST /say/ack          page -> { sayId, state: "started" | "done" | "error" | "cancelled" }
 //   GET  /tts/:sayId       ElevenLabs streaming TTS proxy (API key never reaches the browser)
 //   GET  /health
@@ -123,9 +125,38 @@ export function createServer(cfg = configFromEnv()) {
   const broadcast = (event, data, callId) => {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     let n = 0;
-    for (const c of clients) if (!callId || c.callId === callId) { c.write(msg); n++; }
+    for (const c of clients) {
+      if (callId && c.callId !== callId) continue;
+      if (c.polling) c.push({ event, data }); else c.write(msg);
+      n++;
+    }
     return n;
   };
+
+  // Long-poll clients: the page asks, the server answers as soon as there is something to say (or after 20 s).
+  const pollers = new Map(); // client id -> { callId, queue, waiter, seenAt }
+  function poller(id, callId) {
+    let c = pollers.get(id);
+    if (!c) {
+      c = { polling: true, callId, queue: [], waiter: null, seenAt: Date.now(),
+        push(ev) { this.queue.push(ev); if (this.waiter) this.waiter(); },
+        end() { if (this.waiter) this.waiter(); } };
+      pollers.set(id, c);
+      clients.add(c);
+      log(`page connected (call ${callId ?? "-"}, polling); ${clients.size} page(s)`);
+      if (callId) { ensureBridge(callId); flushWaiting(callId); }
+    }
+    c.seenAt = Date.now();
+    return c;
+  }
+  const sweep = setInterval(() => {
+    for (const [id, c] of pollers) {
+      if (c.waiter || Date.now() - c.seenAt < 35_000) continue; // a held request, or it asked recently
+      pollers.delete(id); clients.delete(c);
+      log(`page disconnected (call ${c.callId ?? "-"}, polling); ${clients.size} page(s)`);
+    }
+  }, 10_000);
+  sweep.unref();
 
   // Recall sends relative seconds only. Fix t=0 per bot from its first final segment (receivedAt - segmentEnd).
   // One fixed anchor keeps every utterance on the same clock, so order always matches Recall's relative times;
@@ -293,6 +324,30 @@ export function createServer(cfg = configFromEnv()) {
       const { callId } = await readJson(req);
       return send(res, 202, { ok: true, pages: broadcast("cancel", {}, callId) });
     }
+    if (req.method === "GET" && pathname === "/say/poll") {
+      const id = url.searchParams.get("client") || "";
+      if (!/^[\w-]{6,64}$/.test(id)) return send(res, 400, { error: "client id required" });
+      const c = poller(id, url.searchParams.get("callId") || null);
+      if (c.waiter) c.waiter(); // a newer request from the same page replaces the held one
+      let gone = false, mine = true;
+      if (!c.queue.length) {
+        let done;
+        const wait = new Promise((ok) => { const t = setTimeout(ok, 20_000); done = () => { clearTimeout(t); ok(); }; });
+        c.waiter = done;
+        req.on("close", () => { gone = true; done(); });
+        await wait;
+        mine = c.waiter === done;      // false when a newer request took over while this one was held
+        if (mine) c.waiter = null;
+      }
+      c.seenAt = Date.now();
+      if (gone || res.destroyed) return; // keep the queue for the page's next request
+      return send(res, 200, { events: mine ? c.queue.splice(0) : [] }, { "cache-control": "no-store" });
+    }
+    if (req.method === "POST" && pathname === "/page/reload") {
+      if (!tokenOk(req, url, cfg.sayToken)) return send(res, 401, { error: "bad token" });
+      const { callId } = await readJson(req);
+      return send(res, 202, { pages: broadcast("reload", {}, callId) });
+    }
     if (req.method === "GET" && pathname === "/say/stream") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform",
         connection: "keep-alive", "x-accel-buffering": "no" });
@@ -307,6 +362,10 @@ export function createServer(cfg = configFromEnv()) {
       const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
       req.on("close", () => { clearInterval(ping); clients.delete(res); log(`page disconnected (call ${res.callId ?? "-"}); ${clients.size} page(s)`); });
       return;
+    }
+    if (req.method === "POST" && pathname === "/page/report") { // layout diagnostics from the bot's browser
+      log(`page report ${(await readRaw(req, 20_000)).slice(0, 4000)}`);
+      return send(res, 204, "");
     }
     if (req.method === "POST" && pathname === "/say/ack") {
       const ack = await readJson(req);
@@ -356,8 +415,9 @@ export function createServer(cfg = configFromEnv()) {
   server.stats = stats;
   if (ttsReady()) for (const text of cfg.sayPrecache) startTts(text, "precache");
   server.closeClients = () => {
+    clearInterval(sweep);
     for (const c of clients) c.end();
-    clients.clear();
+    clients.clear(); pollers.clear();
     for (const b of bridges.values()) b.ctrl.abort();
   };
   return server;

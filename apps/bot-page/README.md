@@ -7,7 +7,7 @@ A zero-dependency Node server (Node >= 20.6) that puts Gomon in a Google Meet th
 
 ```bash
 cd apps/bot-page
-npm test                          # 32 tests, no network
+npm test                          # 35 tests, no network
 npm run dev                       # server on :8787 (reads the repo-root .env)
 npm run create-bot -- <meet_url>  # send the bot into a Meet; admit "Gomon" when Meet asks
 npm run say -- "text" [normal|high] [callId]   # make Gomon speak without the worker
@@ -70,7 +70,10 @@ Audio generation starts the moment a say arrives, and finished lines are cached 
 | `POST /recall/webhook/?callId=` | Recall `transcript.data` events |
 | `POST /say` | `{ sayId?, text, priority?, callId? }`. Without `callId` every open page speaks |
 | `POST /say/cancel` | Drop queued, unspoken lines |
-| `GET /say/stream` | SSE to the bot page |
+| `GET /say/poll?client=&callId=` | Long-poll used by the bot page. Answers as soon as there is something to say |
+| `GET /say/stream` | SSE alternative. Cloudflare quick tunnels do not deliver SSE, which is why the page polls |
+| `POST /page/reload` | `{ callId? }` makes connected pages reload, to pick up a new page without a new bot |
+| `POST /page/report` | The page posts its measured layout here (logged), to debug rendering inside Recall's browser |
 | `POST /say/ack` | The page reports `started`, `done`, `error`, `cancelled` |
 | `GET /tts/:sayId` | Audio for a say (the ElevenLabs key stays on the server) |
 | `GET /health` | Pages, worker bridge state, counters |
@@ -83,9 +86,12 @@ Gomon is addressed. It is a development tool, not the agent, and must not be use
 
 ## Not done
 
-- The worker bridge is covered by tests against a fake worker; it has not yet run against the real worker.
+- The worker bridge ran against the real worker in a Meet on 2026-11-14: a spoken question was answered aloud from team memory.
 - Scribe fallback (mic plus ElevenLabs Scribe) is not built.
-- The public URL was a temporary tunnel; a stable address is needed for the demo.
+- Public URL: `cloudflared tunnel --url http://localhost:8787` keeps one address while it runs, but it delivers each
+  audio clip only when the clip is complete and does not pass SSE. localhost.run streams, but changed its address
+  after about 20 minutes, which silently disconnects the bot.
+- `/?calibrate=1` on the page URL draws a test pattern, to see how a meeting crops the bot's camera.
 
 ## Gomon's face (Max, design)
 

@@ -266,6 +266,38 @@ test("worker bridge: a say that arrives before the page connects is held, then s
   ctrl.abort();
 });
 
+test("long-poll: a held request answers the moment something is said, and nothing said between polls is lost", async () => {
+  const poll = () => fetch(`${base}/say/poll?callId=call-P&client=client-P1`).then((r) => r.json());
+  const say = (sayId, text) => fetch(`${base}/say`, { method: "POST", body: JSON.stringify({ sayId, text, callId: "call-P" }) }).then((r) => r.json());
+  const connected = async () => (await (await fetch(`${base}/health`)).json()).calls.includes("call-P");
+
+  const held = poll();
+  for (let i = 0; i < 100 && !(await connected()); i++) await new Promise((r) => setTimeout(r, 10));
+  const t0 = Date.now();
+  assert.equal((await say("p-1", "first")).pages, 1);
+  const first = await held;
+  assert.ok(Date.now() - t0 < 1000, "the held request returned at once");
+  assert.deepEqual(first.events, [{ event: "say", data: { sayId: "p-1", text: "first", priority: "normal" } }]);
+
+  await say("p-2", "second"); await say("p-3", "third"); // no request is held right now
+  assert.deepEqual((await poll()).events.map((e) => e.data.sayId), ["p-2", "p-3"]);
+
+  const held2 = poll();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await (await fetch(`${base}/page/reload`, { method: "POST", body: JSON.stringify({ callId: "call-P" }) })).json()).pages, 1);
+  assert.deepEqual((await held2).events, [{ event: "reload", data: {} }]);
+
+  assert.equal((await fetch(`${base}/say/poll?callId=call-P`)).status, 400);
+});
+
+test("worker bridge speaks to a polling page too", async () => {
+  const poll = () => fetch(`${bridgeBase}/say/poll?callId=call-WP&client=client-WP1`).then((r) => r.json());
+  const held = poll();
+  await until(() => worker.streams.has("call-WP"));
+  emitSay("call-WP", { sayId: "wp-1", text: "On it.", priority: "high" });
+  assert.deepEqual((await held).events, [{ event: "say", data: { sayId: "wp-1", text: "On it.", priority: "high" } }]);
+});
+
 test("/say validation", async () => {
   const post = (b) => fetch(`${base}/say`, { method: "POST", body: JSON.stringify(b) });
   assert.equal((await post({})).status, 400);
