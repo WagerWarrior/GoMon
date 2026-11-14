@@ -29,19 +29,41 @@ const el = http.createServer(async (req, res) => {
   res.write(Buffer.from([0xff, 0xfb])); setTimeout(() => res.end(Buffer.from([1, 2, 3])), 20);
 });
 
-let signed, tokened, base, tokenBase;
+// Fake worker (apps/worker contract): SSE of says per call, acks, utterances; all need the bearer token.
+const worker = { streams: new Map(), acks: [], utterances: [], auth: [] };
+const fakeWorker = http.createServer(async (req, res) => {
+  const url = new URL(req.url, "http://x");
+  worker.auth.push(req.headers.authorization);
+  if (req.method === "GET" && url.pathname === "/api/says/stream") {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(": keep-alive\n\n");
+    worker.streams.set(url.searchParams.get("callId"), res);
+    return;
+  }
+  let b = ""; for await (const c of req) b += c;
+  const ack = /^\/api\/says\/([^/]+)\/ack$/.exec(url.pathname);
+  if (ack) { worker.acks.push({ sayId: ack[1], ...JSON.parse(b) }); res.writeHead(200); return res.end("{}"); }
+  if (url.pathname === "/api/utterances") { worker.utterances.push(JSON.parse(b)); res.writeHead(201); return res.end("{}"); }
+  res.writeHead(404); res.end();
+});
+const emitSay = (callId, say) => worker.streams.get(callId).write(`event: say\ndata: ${JSON.stringify(say)}\n\n`);
+
+let signed, tokened, bridged, base, tokenBase, bridgeBase;
 const logs = [];
 before(async () => {
   const sinkUrl = await listen(sink), elUrl = await listen(el);
-  const common = { ...configFromEnv({}), utteranceApiUrl: `${sinkUrl}/api/utterances`, elBaseUrl: elUrl,
+  const common = { ...configFromEnv({}), workerUrl: "", utteranceApiUrl: `${sinkUrl}/api/utterances`, elBaseUrl: elUrl,
     elKey: "test-key", elVoice: "voice-1", log: (...a) => logs.push(a.join(" ")) };
   signed = createServer({ ...common, webhookSecret: SECRET });
   tokened = createServer({ ...common, webhookToken: "s3cret" });
-  base = await listen(signed); tokenBase = await listen(tokened);
+  const workerUrl = await listen(fakeWorker);
+  bridged = createServer({ ...common, workerUrl, workerToken: "wt", utteranceApiUrl: `${workerUrl}/api/utterances` });
+  base = await listen(signed); tokenBase = await listen(tokened); bridgeBase = await listen(bridged);
 });
 after(() => {
-  for (const s of [signed, tokened]) { s.closeClients(); s.close(); }
-  sink.close(); el.close();
+  for (const s of [signed, tokened, bridged]) { s.closeClients(); s.close(); }
+  for (const r of worker.streams.values()) r.end();
+  sink.close(); el.close(); fakeWorker.close(); fakeWorker.closeAllConnections();
 });
 
 const postSigned = (body, { path = "/recall/webhook/?callId=call-1", headers } = {}) => {
@@ -198,6 +220,50 @@ test("audio generation starts at /say, and a repeated line is served from cache"
   assert.equal(second.status, 200);
   assert.deepEqual(Buffer.from(await second.arrayBuffer()), first);
   assert.equal(requests(), 1, "no second ElevenLabs request for the same text");
+});
+
+test("worker bridge: the worker's says are spoken on that call's page and acked back", async () => {
+  const ctrl = new AbortController();
+  const page = async (callId) => {
+    const r = await fetch(`${bridgeBase}/say/stream?callId=${callId}`, { signal: ctrl.signal });
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    (async () => { try { for (;;) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value); } } catch { /* aborted */ } })();
+    return () => buf;
+  };
+  const ack = (sayId, state) => fetch(`${bridgeBase}/say/ack`, { method: "POST", body: JSON.stringify({ sayId, state }) });
+
+  const seen = await page("call-W");
+  await until(() => worker.streams.has("call-W")); // a page for the call makes the server follow the worker
+  emitSay("call-W", { sayId: "w-1", text: "D-09 says no synchronous billing writes.", priority: "high", reason: "conflict" });
+  await until(() => seen().includes("w-1"));
+  assert.match(seen(), /"priority":"high"/);
+  assert.equal((await fetch(`${bridgeBase}/tts/w-1`)).status, 200);
+
+  emitSay("call-W", { sayId: "w-1", text: "D-09 says no synchronous billing writes.", priority: "high" }); // replay
+  emitSay("call-W", { sayId: "w-2", text: "Locking in: token buckets.", priority: "normal" });
+  await until(() => seen().includes("w-2"));
+  assert.equal(seen().split('"sayId":"w-1"').length - 1, 1, "a replayed say is spoken once");
+
+  await ack("w-1", "started"); await ack("w-1", "done"); await ack("w-2", "error");
+  await until(() => worker.acks.length === 3);
+  assert.deepEqual(worker.acks, [{ sayId: "w-1", status: "started" }, { sayId: "w-1", status: "done" }, { sayId: "w-2", status: "failed" }]);
+  assert.ok(worker.auth.every((a) => a === "Bearer wt"), "every worker request carries the token");
+  ctrl.abort();
+});
+
+test("worker bridge: a say that arrives before the page connects is held, then spoken", async () => {
+  // A transcript for the call starts the bridge even with no page connected yet.
+  const raw = JSON.stringify(recallEvent("transcript.data", [w("Early", 80, 81)], { botId: "bot-early" }));
+  await fetch(`${bridgeBase}/recall/webhook/?callId=call-E`, { method: "POST", body: raw });
+  await until(() => worker.streams.has("call-E") && worker.utterances.some((u) => u.callId === "call-E"));
+  emitSay("call-E", { sayId: "e-1", text: "Held line.", priority: "normal" });
+  await new Promise((r) => setTimeout(r, 60));
+  const ctrl = new AbortController();
+  const r = await fetch(`${bridgeBase}/say/stream?callId=call-E`, { signal: ctrl.signal });
+  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+  while (!buf.includes("e-1")) buf += dec.decode((await reader.read()).value);
+  assert.match(buf, /Held line\./);
+  ctrl.abort();
 });
 
 test("/say validation", async () => {

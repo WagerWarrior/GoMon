@@ -7,6 +7,10 @@
 //   POST /say/ack          page -> { sayId, state: "started" | "done" | "error" | "cancelled" }
 //   GET  /tts/:sayId       ElevenLabs streaming TTS proxy (API key never reaches the browser)
 //   GET  /health
+//
+// Worker bridge (apps/worker): utterances go to WORKER_URL/api/utterances, and for every call with a bot page
+// this server follows WORKER_URL/api/says/stream?callId= and speaks each say, acking back to
+// /api/says/:sayId/ack. The bot page runs in Recall's cloud browser and cannot reach the worker itself.
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -18,7 +22,10 @@ const PAGE = new URL("../public/index.html", import.meta.url);
 export function configFromEnv(env = process.env) {
   return {
     port: Number(env.BOT_PAGE_PORT || 8787),
-    utteranceApiUrl: env.UTTERANCE_API_URL || "http://localhost:3000/api/utterances",
+    // WORKER_URL="" turns the bridge off (e.g. when testing against scripts/dev-sink.js).
+    workerUrl: (env.WORKER_URL ?? "http://localhost:3001").replace(/\/$/, ""),
+    workerToken: env.WORKER_TOKEN || "",
+    utteranceApiUrl: env.UTTERANCE_API_URL || `${(env.WORKER_URL || "http://localhost:3001").replace(/\/$/, "")}/api/utterances`,
     webhookSecret: env.RECALL_WEBHOOK_SECRET || "", // whsec_... (preferred; Recall signs every request)
     webhookToken: env.RECALL_WEBHOOK_TOKEN || "",   // ?token= fallback when no workspace secret exists
     sayToken: env.SAY_TOKEN || "",
@@ -67,6 +74,10 @@ export function createServer(cfg = configFromEnv()) {
   const seen = new Set();        // sourceKeys already delivered (or in flight)
   const stats = { webhooks: 0, finals: 0, partials: 0, duplicates: 0, delivered: 0, failed: 0, rejected: 0,
     ttsRequests: 0, ttsCacheHits: 0 };
+  const bridges = new Map();     // callId -> { ctrl, connected } : following the worker's says stream
+  const workerSays = new Set();  // sayIds that came from the worker (dedup replays, route acks back)
+  const waiting = new Map();     // callId -> says that arrived while no page for that call was connected
+  const workerHeaders = (extra = {}) => ({ ...(cfg.workerToken ? { authorization: `Bearer ${cfg.workerToken}` } : {}), ...extra });
   const ttsCache = new Map();    // text -> Buffer (finished audio), oldest first
   const ttsReady = () => Boolean(cfg.elKey && cfg.elVoice);
 
@@ -128,12 +139,86 @@ export function createServer(cfg = configFromEnv()) {
     return anchors.get(botId);
   }
 
+  function enqueueSay({ sayId, text, priority = "normal", callId, from = "api" }) {
+    const now = Date.now();
+    for (const [id, p] of pending) if (now - p.createdAt > 10 * 60_000) pending.delete(id);
+    if (!pending.has(sayId)) pending.set(sayId, { text, priority, callId, from, createdAt: now, tts: ttsReady() ? startTts(text, sayId) : null });
+    const pages = broadcast("say", { sayId, text, priority }, callId);
+    log(`say ${sayId} (${from}, ${priority}${callId ? `, call ${callId}` : ""}) -> ${pages} page(s): ${text.slice(0, 80)}`);
+    return pages;
+  }
+
+  function ackWorker(sayId, state) {
+    const status = state === "error" ? "failed" : state; // worker accepts started|done|failed|cancelled
+    fetch(`${cfg.workerUrl}/api/says/${encodeURIComponent(sayId)}/ack`, {
+      method: "POST", headers: workerHeaders({ "content-type": "application/json" }), body: JSON.stringify({ status }),
+    }).then((r) => { if (!r.ok) log(`worker ack ${sayId} ${status} -> ${r.status}`); })
+      .catch((e) => log(`worker ack ${sayId} failed: ${e.message}`));
+  }
+
+  function onWorkerSay(callId, say) {
+    if (!say?.sayId || typeof say.text !== "string" || workerSays.has(say.sayId)) return; // the stream replays queued says
+    workerSays.add(say.sayId);
+    const item = { sayId: say.sayId, text: say.text, priority: say.priority === "high" ? "high" : "normal", callId, from: "worker" };
+    if (enqueueSay(item) === 0) { // no page for this call right now: hold it until one connects
+      if (!waiting.has(callId)) waiting.set(callId, []);
+      waiting.get(callId).push(item);
+    }
+  }
+
+  function flushWaiting(callId) {
+    const held = waiting.get(callId);
+    if (!held) return;
+    waiting.delete(callId);
+    for (const item of held) {
+      const p = pending.get(item.sayId);
+      if (p && Date.now() - p.createdAt < 30_000) enqueueSay(item);
+      else { pending.delete(item.sayId); ackWorker(item.sayId, "cancelled"); log(`say ${item.sayId} dropped: no page for 30 s`); }
+    }
+  }
+
+  // Follow the worker's SSE of says for one call; reconnect forever with backoff, logging only on state changes.
+  function ensureBridge(callId) {
+    if (!cfg.workerUrl || !callId || bridges.has(callId)) return;
+    const b = { ctrl: new AbortController(), connected: null };
+    bridges.set(callId, b);
+    (async () => {
+      let delay = 500;
+      while (!b.ctrl.signal.aborted) {
+        try {
+          const r = await fetch(`${cfg.workerUrl}/api/says/stream?callId=${encodeURIComponent(callId)}`,
+            { headers: workerHeaders({ accept: "text/event-stream" }), signal: b.ctrl.signal });
+          if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+          if (b.connected !== true) log(`worker says stream connected (call ${callId})`);
+          b.connected = true; delay = 500;
+          const dec = new TextDecoder();
+          let buf = "";
+          for await (const chunk of r.body) {
+            buf += dec.decode(chunk, { stream: true });
+            for (let i; (i = buf.indexOf("\n\n")) >= 0; buf = buf.slice(i + 2)) {
+              const block = buf.slice(0, i);
+              const data = /^data: (.*)$/m.exec(block)?.[1];
+              if (/^event: say$/m.test(block) && data) { try { onWorkerSay(callId, JSON.parse(data)); } catch { /* bad frame */ } }
+            }
+          }
+          throw new Error("stream ended");
+        } catch (e) {
+          if (b.ctrl.signal.aborted) break;
+          if (b.connected !== false) log(`worker says stream unavailable (call ${callId}): ${e.message}; retrying`);
+          b.connected = false;
+          await sleep(delay);
+          delay = Math.min(delay * 2, 5000);
+        }
+      }
+    })();
+  }
+
   async function deliver(u) {
     for (let attempt = 1; attempt <= 4; attempt++) {
       const t0 = performance.now();
       try {
         const r = await fetch(cfg.utteranceApiUrl, {
-          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(u),
+          method: "POST", headers: workerHeaders({ "content-type": "application/json" }), body: JSON.stringify(u),
         });
         const ms = Math.round(performance.now() - t0);
         log(`utterance ${r.status} ${ms}ms [${u.speaker.displayName}] ${u.text.slice(0, 80)}`);
@@ -159,7 +244,9 @@ export function createServer(cfg = configFromEnv()) {
     if (req.method === "GET" && pathname === "/health") {
       return send(res, 200, {
         ok: true, pages: clients.size, calls: [...clients].map((c) => c.callId), pending: pending.size, tts: Boolean(cfg.elKey && cfg.elVoice),
-        webhookAuth: cfg.webhookSecret ? "signature" : cfg.webhookToken ? "token" : "none", stats,
+        webhookAuth: cfg.webhookSecret ? "signature" : cfg.webhookToken ? "token" : "none",
+        worker: cfg.workerUrl ? Object.fromEntries([...bridges].map(([id, b]) => [id, b.connected ? "connected" : "retrying"])) : "off",
+        stats,
       });
     }
 
@@ -180,6 +267,7 @@ export function createServer(cfg = configFromEnv()) {
       if (body.event === PARTIAL_EVENT) { stats.partials++; return; } // partial text never becomes an utterance
       const callId = url.searchParams.get("callId") || body.data?.bot?.metadata?.callId;
       if (!callId) return log("recall webhook: no callId (query or bot.metadata) — ignored");
+      ensureBridge(callId);
       const u = toUtterance(body, callId, { anchorMs: anchorFor(body, receivedAt) });
       if (!u) return log(`recall event ignored: ${body.event}`);
       stats.finals++;
@@ -194,12 +282,7 @@ export function createServer(cfg = configFromEnv()) {
       const { sayId = randomUUID(), text, priority = "normal", callId } = await readJson(req);
       if (!text || typeof text !== "string") return send(res, 400, { error: "text required" });
       if (!/^[\w-]{1,128}$/.test(sayId)) return send(res, 400, { error: "sayId must match [\\w-]{1,128}" });
-      const now = Date.now();
-      for (const [id, p] of pending) if (now - p.createdAt > 10 * 60_000) pending.delete(id);
-      pending.set(sayId, { text, priority, createdAt: now, tts: ttsReady() ? startTts(text, sayId) : null });
-      const pages = broadcast("say", { sayId, text, priority }, callId);
-      log(`say ${sayId} (${priority}${callId ? `, call ${callId}` : ""}) -> ${pages} page(s): ${text.slice(0, 80)}`);
-      return send(res, 202, { sayId, pages });
+      return send(res, 202, { sayId, pages: enqueueSay({ sayId, text, priority, callId }) });
     }
     if (req.method === "POST" && pathname === "/say/cancel") {
       if (!tokenOk(req, url, cfg.sayToken)) return send(res, 401, { error: "bad token" });
@@ -216,6 +299,7 @@ export function createServer(cfg = configFromEnv()) {
       res.write(": connected\n\n");
       clients.add(res);
       log(`page connected (call ${res.callId ?? "-"}); ${clients.size} page(s)`);
+      if (res.callId) { ensureBridge(res.callId); flushWaiting(res.callId); }
       const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
       req.on("close", () => { clearInterval(ping); clients.delete(res); log(`page disconnected (call ${res.callId ?? "-"}); ${clients.size} page(s)`); });
       return;
@@ -226,6 +310,7 @@ export function createServer(cfg = configFromEnv()) {
       const sinceSayMs = p ? Date.now() - p.createdAt : null;
       log(`ack ${ack.sayId} ${ack.state}${sinceSayMs != null ? ` +${sinceSayMs}ms since /say` : ""}`);
       if (["done", "error", "cancelled"].includes(ack.state)) pending.delete(ack.sayId);
+      if (workerSays.has(ack.sayId) && ["started", "done", "error", "cancelled"].includes(ack.state)) ackWorker(ack.sayId, ack.state);
       if (cfg.sayAckUrl) {
         fetch(cfg.sayAckUrl, {
           method: "POST", headers: { "content-type": "application/json" },
@@ -266,13 +351,17 @@ export function createServer(cfg = configFromEnv()) {
   );
   server.stats = stats;
   if (ttsReady()) for (const text of cfg.sayPrecache) startTts(text, "precache");
-  server.closeClients = () => { for (const c of clients) c.end(); clients.clear(); };
+  server.closeClients = () => {
+    for (const c of clients) c.end();
+    clients.clear();
+    for (const b of bridges.values()) b.ctrl.abort();
+  };
   return server;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const cfg = configFromEnv();
   createServer(cfg).listen(cfg.port, () =>
-    cfg.log(`bot-page on :${cfg.port}; utterances -> ${cfg.utteranceApiUrl}; webhook auth: ${
+    cfg.log(`bot-page on :${cfg.port}; utterances -> ${cfg.utteranceApiUrl}; worker says: ${cfg.workerUrl || "off"}; webhook auth: ${
       cfg.webhookSecret ? "signature" : cfg.webhookToken ? "token" : "NONE"}`));
 }
