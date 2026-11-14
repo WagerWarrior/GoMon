@@ -95,11 +95,11 @@ function b64(int16) {
 
 async function connectScribe(channel) {
   const r = await fetch("/ears/token");
-  const { token, error } = await r.json();
+  const { token, error, keyterms } = await r.json();
   if (!token) throw new Error(error ?? "no token");
   // turn_prediction: commit on silence OR when the model predicts the speaker finished (people rarely pause cleanly in calls).
   const p = new URLSearchParams({ model_id: MODEL, token, audio_format: "pcm_16000", commit_strategy: "turn_prediction", vad_silence_threshold_secs: "0.6" });
-  p.append("keyterms", "Gomon");
+  for (const k of keyterms?.length ? keyterms : ["Gomon"]) p.append("keyterms", k);
   const ws = new WebSocket(`wss://api.elevenlabs.io/v1/speech-to-text/realtime?${p}`);
   ws.onopen = () => status(channel, "live", "live");
   ws.onmessage = async (m) => {

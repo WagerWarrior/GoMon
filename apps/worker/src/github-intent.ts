@@ -7,7 +7,7 @@
 import type { ObjectId } from "mongodb";
 import { enqueueGithub, githubKey, memoryIssue, type Ctx } from "./governance.ts";
 import type { GithubIntent } from "./llm.ts";
-import { loadPeople, resolvePerson, type Person } from "./people.ts";
+import { learnAlias, loadPeople, resolvePerson, type Person } from "./people.ts";
 import { createProjectWithBoard, findProject } from "./projects.ts";
 import type { Retrieved } from "./retrieve.ts";
 import { memoryFilter } from "./scope.ts";
@@ -111,6 +111,11 @@ export async function handleGithubIntent(
   const people = g.assignees.length || g.unassign.length ? await loadPeople(ctx) : [];
   const add = resolvePeople(people, g.assignees, speaker);
   const remove = resolvePeople(people, g.unassign, speaker);
+  // A misspelled name that resolved by sound is remembered on that person (people.ts).
+  for (const s of [...g.assignees, ...g.unassign]) {
+    const p = resolvePerson(people, s, speaker);
+    if (p && !["me", "myself", "i"].includes(s.trim().toLowerCase())) void learnAlias(ctx, p, s, callId).catch((e) => console.error("[alias]", e instanceof Error ? e.message : e));
+  }
   const labels = [...new Set(g.labels.map((l) => l.trim().toLowerCase()).filter(Boolean))];
   const forWho = add.found.length ? ` for ${names(add.found.map(first))}` : "";
 

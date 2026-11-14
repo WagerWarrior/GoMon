@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import type { Cols } from "./db.ts";
 import { config } from "./config.ts";
 import { bargeIn } from "./floor.ts";
+import { keyterms } from "./people.ts";
 import { speakingText, stopSpeaking } from "./voice.ts";
 
 type PostUtterance = (b: Record<string, unknown>) => Promise<{ status: number; data: unknown }>;
@@ -77,7 +78,9 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
   if (req.method === "GET" && url.pathname === "/ears/token") {
     const r = await fetch("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe", { method: "POST", headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "" } });
     const body = (await r.json()) as { token?: string; detail?: unknown };
-    send(res, r.ok && body.token ? 200 : 502, r.ok && body.token ? { token: body.token } : { error: "token failed", detail: body.detail });
+    // The team's names ride along, so Scribe spells people, logins and projects right (people.ts keyterms).
+    const terms = await keyterms({ c, teamId: config.teamId }).catch(() => ["Gomon"]);
+    send(res, r.ok && body.token ? 200 : 502, r.ok && body.token ? { token: body.token, keyterms: terms } : { error: "token failed", detail: body.detail });
     return true;
   }
   // The call to listen for: the latest live call that has a Gomon bot (so nobody types a call id).

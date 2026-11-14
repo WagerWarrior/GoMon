@@ -47,10 +47,11 @@ export default function Listen({ callId, defaultMe, defaultRemote }: { callId: s
 
   async function connect(channel: Channel): Promise<WebSocket> {
     const r = await fetch("/api/ears/token");
-    const { token } = (await r.json()) as { token?: string };
+    const { token, keyterms } = (await r.json()) as { token?: string; keyterms?: string[] };
     if (!token) throw new Error("no Scribe token (is the worker running?)");
     const p = new URLSearchParams({ model_id: MODEL, token, audio_format: "pcm_16000", commit_strategy: "turn_prediction", vad_silence_threshold_secs: "0.6" });
-    p.append("keyterms", "Gomon");
+    // The team's names from Atlas (worker people.ts), so Scribe spells people, logins and projects right.
+    for (const k of keyterms?.length ? keyterms : ["Gomon"]) p.append("keyterms", k);
     const ws = new WebSocket(`wss://api.elevenlabs.io/v1/speech-to-text/realtime?${p}`);
     ws.onmessage = async (m: MessageEvent<string>) => {
       const e = JSON.parse(m.data) as ScribeEvent;
