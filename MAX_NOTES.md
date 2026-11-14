@@ -74,6 +74,18 @@ workspace empty and break Statement Two. The mode already exists: template `sile
    (refreshed every N turns) so the model sees the whole call, not the last 8 lines. The web UI already shows each run's
    recalled memories, latencies and decision, so whatever you store there will be visible.
 
+## Memory is always on inside calls (Max, Nov 14)
+No memory-off mode for Gomon in a call. Rob: drop the `memoryEnabled` branch in `agent.ts` (or ignore `false`) and the
+`PATCH /api/calls/:id {memoryEnabled}` field; the web shows no toggle and will not add one. The on/off comparison stays
+only in Ask Gomon (dashboard), outside calls, as the Statement Two proof.
+
+## After-call recap + record (branch feat/meeting-recap, from Claude Meetings' summary email and docs)
+When a call goes `status: "ended"`, the connector worker builds a recap from the governed record (no model call):
+summary (`calls.summary`), Decided (keys), Tasks (T- keys), Changed in memory, Action items, Open questions,
+Team memory pushed back (conflict -> memory key), Filed (links). It is stored on `calls.recap` `{ at, text, counts, requestedBy?, note? }`
+(web: show it on the session page), posted once into the call's Slack thread (`recap:<callId>`), and filed as
+`calls/<date>-<callId>.md` on the `gomon-records` branch (`doc:<callId>`, github op `write_doc`, never the default branch).
+
 ## Still open
 1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,
    tell us which database the workspace reads and how promotion crosses (it cannot share one transaction).
