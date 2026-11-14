@@ -28,6 +28,7 @@ export function configFromEnv(env = process.env) {
     // WORKER_URL="" turns the bridge off (e.g. when testing against scripts/dev-sink.js).
     workerUrl: (env.WORKER_URL ?? "http://localhost:3001").replace(/\/$/, ""),
     workerToken: env.WORKER_TOKEN || "",
+    staleSayMs: Number(env.STALE_SAY_MS || 30_000), // worker says older than this are cancelled, not spoken
     utteranceApiUrl: env.UTTERANCE_API_URL || `${(env.WORKER_URL || "http://localhost:3001").replace(/\/$/, "")}/api/utterances`,
     webhookSecret: env.RECALL_WEBHOOK_SECRET || "", // whsec_... (preferred; Recall signs every request)
     webhookToken: env.RECALL_WEBHOOK_TOKEN || "",   // ?token= fallback when no workspace secret exists
@@ -191,6 +192,13 @@ export function createServer(cfg = configFromEnv()) {
   function onWorkerSay(callId, say) {
     if (!say?.sayId || typeof say.text !== "string" || workerSays.has(say.sayId)) return; // the stream replays queued says
     workerSays.add(say.sayId);
+    // The stream replays every say still marked queued. After a restart or an outage those can be minutes old;
+    // speaking them then would be worse than silence, so they are cancelled instead.
+    const ageMs = say.createdAt ? Date.now() - Date.parse(say.createdAt) : 0;
+    if (ageMs > cfg.staleSayMs) {
+      log(`say ${say.sayId} skipped: ${Math.round(ageMs / 1000)} s old`);
+      return ackWorker(say.sayId, "cancelled");
+    }
     const item = { sayId: say.sayId, text: say.text, priority: say.priority === "high" ? "high" : "normal", callId, from: "worker" };
     if (enqueueSay(item) === 0) { // no page for this call right now: hold it until one connects
       if (!waiting.has(callId)) waiting.set(callId, []);

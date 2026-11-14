@@ -290,6 +290,17 @@ test("long-poll: a held request answers the moment something is said, and nothin
   assert.equal((await fetch(`${base}/say/poll?callId=call-P`)).status, 400);
 });
 
+test("worker bridge: a replayed say that is already old is cancelled, not spoken", async () => {
+  const poll = () => fetch(`${bridgeBase}/say/poll?callId=call-OLD&client=client-OLD1`).then((r) => r.json());
+  const held = poll();
+  await until(() => worker.streams.has("call-OLD"));
+  emitSay("call-OLD", { sayId: "old-1", text: "Twenty minutes late.", priority: "high", createdAt: new Date(Date.now() - 20 * 60_000).toISOString() });
+  emitSay("call-OLD", { sayId: "new-1", text: "Right on time.", priority: "normal", createdAt: new Date().toISOString() });
+  assert.deepEqual((await held).events.map((e) => e.data.sayId), ["new-1"]);
+  await until(() => worker.acks.some((a) => a.sayId === "old-1"));
+  assert.deepEqual(worker.acks.find((a) => a.sayId === "old-1"), { sayId: "old-1", status: "cancelled" });
+});
+
 test("worker bridge speaks to a polling page too", async () => {
   const poll = () => fetch(`${bridgeBase}/say/poll?callId=call-WP&client=client-WP1`).then((r) => r.json());
   const held = poll();
