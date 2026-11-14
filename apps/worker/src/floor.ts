@@ -3,7 +3,8 @@
  *   1. Only a spoken wake word addresses Gomon. The analysis model may not decide on its own that a line was "for Gomon":
  *      in call-202611142054-291b it answered "How can we resolve the EU residency question?" and "What do you think we should
  *      do?" (no name said), and the 20 s follow-up window answered "Is that a larf? Yeah, it".
- *   2. Barge-in: Gomon stops talking when someone says "stop", talks over it for 5+ words, or keeps talking for 1.2 s.
+ *   2. Barge-in: Gomon stops talking when someone says "stop". Talking over it (5+ words or 1.2 s) also stops it only with
+ *      BARGE_TALK_OVER=on: live (call-202611142139-869a) the asker finishing their own question cut the answer after 1 s.
  * Pure functions, no database: tested in test/floor.test.ts.
  */
 import type { Analysis } from "./llm.ts";
@@ -37,15 +38,17 @@ export type BargeIn = "stop_word" | "talk_over" | null;
 
 /**
  * Should Gomon stop talking? `heard` is a partial or committed transcript from a person, `speaking` the line Gomon is saying
- * (null when silent), `ms` how long this person has been talking in this turn (0 when unknown).
+ * (null when silent), `ms` how long this person has been talking in this turn (0 when unknown). `talkOver` enables the
+ * talk-over rule (off by default: an explicit stop word is the only interruption).
  */
-export function bargeIn(heard: string, speaking: string | null, ms = 0): BargeIn {
+export function bargeIn(heard: string, speaking: string | null, ms = 0, talkOver = process.env.BARGE_TALK_OVER === "on"): BargeIn {
   if (speaking === null) return null;
   const h = words(heard);
   if (!h.length) return null;
   // Gomon hearing itself is not an interruption.
   if (echoShare(heard, speaking) >= 0.5) return null;
   if (STOP.test(heard) && !STOP.test(speaking)) return "stop_word";
+  if (!talkOver) return null;
   if (h.length >= BARGE_WORDS) return "talk_over";
   if (ms >= BARGE_MS && h.length >= 2) return "talk_over";
   return null;

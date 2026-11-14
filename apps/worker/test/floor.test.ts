@@ -41,11 +41,12 @@ test("barge-in: 'stop' stops it at once", () => {
   assert.equal(bargeIn("okay Gomon stop", SAYING), "stop_word");
 });
 test("barge-in: five words over it stop it; four short ones under 1.2 s do not", () => {
-  assert.equal(bargeIn("no that is not what I meant", SAYING), "talk_over");
+  assert.equal(bargeIn("no that is not what I meant", SAYING, 0, true), "talk_over");
+  assert.equal(bargeIn("no that is not what I meant", SAYING), null); // talk-over is opt-in (BARGE_TALK_OVER=on)
   assert.equal(bargeIn("yeah okay sure", SAYING, 400), null);
 });
 test("barge-in: talking for 1.2 s stops it", () => {
-  assert.equal(bargeIn("well actually", SAYING, 1300), "talk_over");
+  assert.equal(bargeIn("well actually", SAYING, 1300, true), "talk_over");
   assert.equal(bargeIn("mm", SAYING, 1300), null);
 });
 test("barge-in: Gomon's own voice coming back through the meeting audio is not an interruption", () => {
