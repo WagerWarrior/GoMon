@@ -1,5 +1,6 @@
 import type { Db } from "mongodb";
 import { dueActionIds, processAction } from "./outbox";
+import { ensureWorkflowIndexes, sweepWorkflows } from "./workflows";
 import type { Env } from "./types";
 
 /**
@@ -12,12 +13,13 @@ export function runConnectors(d: Db, env: Env, opts: { sweepMs?: number; log?: (
   async function sweep() {
     if (busy) { again = true; return; }
     busy = true;
-    try { do { again = false; for (const id of await dueActionIds(d)) { const o = await processAction(d, id, env); if (o !== "skipped") log(`${id} -> ${o}`); } } while (again && !stopped); }
+    try { do { again = false; const wf = await sweepWorkflows(d); if (wf) log(`workflows fired: ${wf}`); for (const id of await dueActionIds(d)) { const o = await processAction(d, id, env); if (o !== "skipped") log(`${id} -> ${o}`); } } while (again && !stopped); }
     catch (e: any) { log(`sweep error: ${e?.message ?? e}`); } finally { busy = false; }
   }
   void sweep();
   const iv = setInterval(sweep, opts.sweepMs ?? 2000);
-  let cs: any;
+  let cs: any; let ev: any;
+  void ensureWorkflowIndexes(d).catch((e) => log(`workflow indexes: ${e?.message ?? e}`));
   (async () => {
     try {
       const offsets = d.collection<any>("stream_offsets");
@@ -25,7 +27,11 @@ export function runConnectors(d: Db, env: Env, opts: { sweepMs?: number; log?: (
       cs = d.collection("actions").watch([{ $match: { operationType: { $in: ["insert", "update", "replace"] } } }], saved?.token ? { resumeAfter: saved.token } : {});
       cs.on("change", async (ev: any) => { await offsets.updateOne({ _id: "connectors" }, { $set: { token: ev._id, at: new Date() } }, { upsert: true }); void sweep(); });
       cs.on("error", (e: any) => log(`change stream error (sweep keeps running): ${e?.message ?? e}`));
+      // Trigger events (a lock, a correction) wake the sweep at once so workflows fire within a second.
+      ev = d.collection("audit_events").watch([{ $match: { operationType: "insert", "fullDocument.type": { $in: ["memory_locked", "memory_corrected"] } } }]);
+      ev.on("change", () => void sweep());
+      ev.on("error", (e: any) => log(`audit stream error (sweep keeps running): ${e?.message ?? e}`));
     } catch (e: any) { log(`change stream unavailable, polling only: ${e?.message ?? e}`); }
   })();
-  return { stop: async () => { stopped = true; clearInterval(iv); try { await cs?.close(); } catch {} }, sweep };
+  return { stop: async () => { stopped = true; clearInterval(iv); try { await cs?.close(); await ev?.close(); } catch {} }, sweep };
 }

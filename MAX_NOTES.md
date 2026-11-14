@@ -37,6 +37,22 @@ Proposal "flat 100 req/s, no bursts, including Acme":
 - Memory off: generic advice, no team decisions cited.
 LLM: `LLM_PROVIDER=anthropic`, `LLM_API_KEY` in `.env.example`, default model `claude-haiku-5-5` (`LLM_MODEL` overrides).
 
+## Workflows (automation chains), backend in apps/connectors
+`workflows` `{ teamId, projectId, name, trigger: "memory_locked"|"memory_corrected", steps: [{ type: "post_slack"|"create_issue" }], enabled, enabledAt, createdAt, updatedAt, createdBy }`
+`workflow_runs` `{ workflowId, workflowName, teamId, projectId, trigger, eventId (audit_events._id), callId, memoryId, memoryKey, actor, firedAt, status: "fired"|"skipped", note?, steps: [{ type, actionId, idempotencyKey, duplicate }] }` (unique on workflowId+eventId)
+- The connector worker watches `audit_events` for `memory_locked` / `memory_corrected` (from the workspace AND the voice agent) and
+  fires each enabled workflow once. Steps only enqueue `actions` (same `type:callId:memoryId:vN` keys), so the outbox still checks
+  policy as the person who locked, and a workflow + a click + a voice command send each decision version once (`duplicate: true`).
+- Only events after `enabledAt` fire; doc memories are logged as `skipped` with a reason. Each firing also writes `workflow_fired` to `audit_events`.
+- Default for the demo team: "Decision locked -> Slack + GitHub" (`cd apps/connectors && npm run workflows:seed`). Live on `gomon`:
+  locking D-14 on call `workflow-test-1` fired it; Slack post and GitHub issue #7 both `confirmed`.
+- Toggle = update `enabled` (set `enabledAt: new Date()` when turning on, so old events do not back-fire). Status of each step = join `actionId` to `actions`.
+
+## Heads-up: two connector workers on `gomon`
+Someone besides Max runs `apps/connectors` against `gomon` with `SLACK_CHANNEL_ID=C0CHMM3CXNZ` (#testing-gomon-atlas); `.env.example` says
+`C0CHU319A2V` (#agent-drop). Both are safe together (atomic claim, sent once), but a post lands in whichever worker claims it first.
+Pick one channel, or stop one worker, before the demo.
+
 ## Still open
 1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,
    tell us which database the workspace reads and how promotion crosses (it cannot share one transaction).
