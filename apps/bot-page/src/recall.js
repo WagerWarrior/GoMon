@@ -12,6 +12,16 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const FINAL_EVENT = "transcript.data";
 export const PARTIAL_EVENT = "transcript.partial_data";
+// Barge-in signal: Recall fires this when a participant starts talking (docs.recall.ai real-time webhook endpoints).
+// It carries no text, so it can never become an utterance or trigger an action; it only stops Gomon's audio.
+export const SPEECH_ON_EVENT = "participant_events.speech_on";
+
+/** Participant who started speaking, or null when the payload is not a speech_on event. */
+export function speechOnParticipant(body) {
+  if (!body || body.event !== SPEECH_ON_EVENT) return null;
+  const p = body.data?.data?.participant ?? {};
+  return { id: p.id ?? null, name: typeof p.name === "string" ? p.name : "" };
+}
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 

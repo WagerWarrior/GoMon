@@ -334,3 +334,47 @@ test("the page loads Gomon's live face: /gomon-avatar.js is served as JavaScript
   assert.match(js, /GomonFace/);
   assert.match(js, /"listening"|listening:/);
 });
+
+// Barge-in: a person starting to talk stops Gomon. Recall participant_events.speech_on payload (docs.recall.ai real-time events).
+const speechOn = (name, { id = 9, botId = "bot-1" } = {}) => ({
+  event: "participant_events.speech_on",
+  data: {
+    data: { participant: { id, name, is_host: false, platform: "google_meet", extra_data: {}, email: null },
+      timestamp: { absolute: new Date().toISOString(), relative: 12.3 }, action: "speech_on" },
+    realtime_endpoint: { id: "re-1", metadata: {} }, recording: { id: "rec-1", metadata: {} }, bot: { id: botId, metadata: {} },
+  },
+});
+
+test("barge-in: a person's speech_on sends stop to that call's page; Gomon's own speech_on does not", async () => {
+  const poll = () => fetch(`${base}/say/poll?callId=call-BI&client=client-BI1`).then((r) => r.json());
+  const connected = async () => (await (await fetch(`${base}/health`)).json()).calls.includes("call-BI");
+  const held = poll();
+  for (let i = 0; i < 100 && !(await connected()); i++) await new Promise((r) => setTimeout(r, 10));
+
+  received.length = 0;
+  assert.equal((await postSigned(speechOn("Gomon", { id: 1 }), { path: "/recall/webhook/?callId=call-BI" })).status, 200);
+  await new Promise((r) => setTimeout(r, 50));
+  const t0 = Date.now();
+  assert.equal((await postSigned(speechOn("Tamir Azbel"), { path: "/recall/webhook/?callId=call-BI" })).status, 200);
+  const got = await held;
+  assert.ok(Date.now() - t0 < 500, "stop is delivered at once");
+  assert.deepEqual(got.events, [{ event: "stop", data: { reason: "barge_in", speaker: "Tamir Azbel" } }], "only the person's speech stops Gomon");
+  assert.equal(received.length, 0, "speech events never become utterances");
+  const h = await (await fetch(`${base}/health`)).json();
+  assert.equal(h.stats.bargeIns, 1);
+  assert.equal(h.stats.selfSpeech, 1);
+});
+
+test("barge-in: repeated speech_on within the debounce window sends one stop", async () => {
+  const poll = () => fetch(`${base}/say/poll?callId=call-BD&client=client-BD1`).then((r) => r.json());
+  const connected = async () => (await (await fetch(`${base}/health`)).json()).calls.includes("call-BD");
+  const held = poll();
+  for (let i = 0; i < 100 && !(await connected()); i++) await new Promise((r) => setTimeout(r, 10));
+  await postSigned(speechOn("Rob"), { path: "/recall/webhook/?callId=call-BD" });
+  await held;
+  await postSigned(speechOn("Rob"), { path: "/recall/webhook/?callId=call-BD" });
+  await postSigned(speechOn("Max", { id: 11 }), { path: "/recall/webhook/?callId=call-BD" });
+  await fetch(`${base}/say`, { method: "POST", body: JSON.stringify({ sayId: "bd-1", text: "after", callId: "call-BD" }) });
+  const r = await fetch(`${base}/say/poll?callId=call-BD&client=client-BD1`).then((x) => x.json());
+  assert.deepEqual(r.events.map((e) => e.event), ["say"], "no second stop inside the debounce window");
+});

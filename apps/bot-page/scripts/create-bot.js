@@ -28,7 +28,7 @@ const body = {
   metadata: { callId },
   recording_config: {
     transcript: { provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } } },
-    realtime_endpoints: [{ type: "webhook", url: webhook.toString(), events: ["transcript.data"] }],
+    realtime_endpoints: [{ type: "webhook", url: webhook.toString(), events: ["transcript.data", "participant_events.speech_on"] }],
   },
   // Output Media runs our page in the bot's browser; web_4_core avoids choppy audio/video (docs recommend it).
   variant: { google_meet: RECALL_BOT_VARIANT, zoom: RECALL_BOT_VARIANT, microsoft_teams: RECALL_BOT_VARIANT },

@@ -17,7 +17,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { toUtterance, segmentBounds, verifyRecallSignature, PARTIAL_EVENT } from "./recall.js";
+import { toUtterance, segmentBounds, verifyRecallSignature, PARTIAL_EVENT, speechOnParticipant } from "./recall.js";
 
 const PAGE = new URL("../public/index.html", import.meta.url);
 const FACE = new URL("../public/gomon-avatar.js", import.meta.url); // Gomon's live face, built by design/gomon
@@ -29,6 +29,11 @@ export function configFromEnv(env = process.env) {
     workerUrl: (env.WORKER_URL ?? "http://localhost:3001").replace(/\/$/, ""),
     workerToken: env.WORKER_TOKEN || "",
     staleSayMs: Number(env.STALE_SAY_MS || 30_000), // worker says older than this are cancelled, not spoken
+    // Barge-in: a person starting to talk stops Gomon. BARGE_IN=0 turns it off. The bot's own participant is ignored
+    // (matched by name, the bot_name create-bot sets) so Gomon's voice coming back through Meet never stops itself.
+    bargeIn: env.BARGE_IN !== "0",
+    botName: (env.BOT_NAME || "Gomon").toLowerCase(),
+    bargeInDebounceMs: Number(env.BARGE_IN_DEBOUNCE_MS || 1_000),
     utteranceApiUrl: env.UTTERANCE_API_URL || `${(env.WORKER_URL || "http://localhost:3001").replace(/\/$/, "")}/api/utterances`,
     webhookSecret: env.RECALL_WEBHOOK_SECRET || "", // whsec_... (preferred; Recall signs every request)
     webhookToken: env.RECALL_WEBHOOK_TOKEN || "",   // ?token= fallback when no workspace secret exists
@@ -77,7 +82,8 @@ export function createServer(cfg = configFromEnv()) {
   const anchors = new Map();     // botId -> estimated wall-clock ms of recording t=0
   const seen = new Set();        // sourceKeys already delivered (or in flight)
   const stats = { webhooks: 0, finals: 0, partials: 0, duplicates: 0, delivered: 0, failed: 0, rejected: 0,
-    ttsRequests: 0, ttsCacheHits: 0 };
+    ttsRequests: 0, ttsCacheHits: 0, bargeIns: 0, selfSpeech: 0 };
+  const lastStop = new Map();     // callId -> ms of the last barge-in stop (debounce)
   const bridges = new Map();     // callId -> { ctrl, connected } : following the worker's says stream
   const workerSays = new Set();  // sayIds that came from the worker (dedup replays, route acks back)
   const waiting = new Map();     // callId -> says that arrived while no page for that call was connected
@@ -309,6 +315,16 @@ export function createServer(cfg = configFromEnv()) {
       try { body = JSON.parse(raw); } catch { return log("recall webhook: invalid JSON ignored"); }
       if (body.event === PARTIAL_EVENT) { stats.partials++; return; } // partial text never becomes an utterance
       const callId = url.searchParams.get("callId") || body.data?.bot?.metadata?.callId;
+      const speaker = speechOnParticipant(body);
+      if (speaker) {
+        if (!cfg.bargeIn || !callId) return;
+        if (speaker.name.trim().toLowerCase() === cfg.botName) { stats.selfSpeech++; return; } // Gomon hearing itself
+        if (receivedAt - (lastStop.get(callId) ?? 0) < cfg.bargeInDebounceMs) return;
+        lastStop.set(callId, receivedAt);
+        stats.bargeIns++;
+        const pages = broadcast("stop", { reason: "barge_in", speaker: speaker.name }, callId);
+        return log(`barge-in by ${speaker.name || "unknown"} -> stop to ${pages} page(s) (call ${callId})`);
+      }
       if (!callId) return log("recall webhook: no callId (query or bot.metadata) — ignored");
       ensureBridge(callId);
       const u = toUtterance(body, callId, { anchorMs: anchorFor(body, receivedAt) });

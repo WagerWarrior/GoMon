@@ -27,6 +27,10 @@ The bot page runs in Recall's cloud browser and cannot reach the worker, so this
 `WORKER_TOKEN`, when set, is sent as a bearer token on all three. The worker needs no changes.
 A say that arrives while the bot page is reconnecting is held for up to 30 s, then acked `cancelled`.
 A `high` priority say drops lines that are queued but not yet spoken (those are acked `cancelled`).
+**Barge-in:** the bot subscribes to Recall `participant_events.speech_on`. When a person (not the bot itself, matched by
+`BOT_NAME`, default `Gomon`) starts talking, the page stops the line being spoken and drops the queue, all acked
+`cancelled`. A line under 250 ms old is not cut; stops are debounced per call (`BARGE_IN_DEBOUNCE_MS`, 1 s). `BARGE_IN=0` turns it off.
+Speech events carry no text, so they never become utterances or trigger actions.
 
 ## What the worker should know about the transcripts
 

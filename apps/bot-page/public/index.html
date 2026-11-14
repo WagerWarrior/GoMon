@@ -78,12 +78,13 @@
     const item = queue.shift();
     const audio = new Audio(`/tts/${encodeURIComponent(item.sayId)}`);
     const t0 = performance.now();
-    current = { item, audio };
+    current = { item, audio, startedAt: 0 };
     $line.textContent = `“${item.text}”`;
     audio.addEventListener("playing", () => {
       document.body.classList.add("speaking");
       setFace(/\block/i.test(item.text) ? "locking" : "speaking");
       setStatus("speaking");
+      if (current && current.item === item) current.startedAt = performance.now();
       ack(item.sayId, "started", { pageLatencyMs: Math.round(performance.now() - t0) });
     }, { once: true });
     const finish = (state) => () => {
@@ -95,6 +96,7 @@
       ack(item.sayId, state);
       playNext();
     };
+    current.finish = finish;
     audio.addEventListener("ended", finish("done"), { once: true });
     audio.addEventListener("error", finish("error"), { once: true });
     audio.play().catch((e) => {
@@ -104,6 +106,16 @@
         setStatus("audio blocked by the browser");
       } else finish("error")();
     });
+  }
+
+  // Barge-in: someone started talking. Drop what is queued, and stop the line being spoken unless it began under
+  // 250 ms ago (Meet can report a speaker just as Gomon starts, and a clipped first syllable helps nobody).
+  function stopSpeaking() {
+    queue.splice(0).forEach((q) => ack(q.sayId, "cancelled"));
+    if (!current) return;
+    if (current.startedAt && performance.now() - current.startedAt < 250) return;
+    current.audio.pause();
+    current.finish("cancelled")();
   }
 
   $unlock.addEventListener("click", () => {
@@ -126,6 +138,7 @@
   function onEvent(event, item) {
     if (event === "reload") return location.reload();
     if (event === "cancel") return queue.splice(0).forEach((q) => ack(q.sayId, "cancelled"));
+    if (event === "stop") return stopSpeaking();
     if (event !== "say") return;
     // A high-priority line (someone addressed Gomon) cancels anything not yet spoken.
     if (item.priority === "high") queue.splice(0).forEach((q) => ack(q.sayId, "cancelled"));
