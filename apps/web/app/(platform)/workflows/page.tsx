@@ -17,10 +17,6 @@ export default async function Workflows() {
   const brain = [{ k: "utterances", n: o.kpi.utterances }, { k: "memories", n: o.kpi.memories }, { k: "decisions locked", n: o.kpi.locked }];
   const outputs = [{ name: "Voice", n: `${o.kpi.says} lines` }, ...tools.map((t: any) => ({ name: t.name, n: `${t.done} sent` }))];
   const title = new Map(list.map((s) => [s.id, s]));
-  // One group per session: many conversations at once stay readable.
-  const groups = new Map<string, Run[]>();
-  for (const r of runs as Run[]) { const k = r.callId ?? "—"; (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
-  const cols: { key: string; label: string }[] = (runs[0]?.steps ?? []).map((s: Step) => ({ key: s.key, label: s.label }));
   return (
     <>
       <AutoRefresh />
@@ -61,35 +57,28 @@ export default async function Workflows() {
       )}
 
 
-      {[...groups.entries()].map(([callId, rs]) => {
-        const s = title.get(callId);
-        return (
-          <section key={callId} className="p-card p-flush">
-            <div className="p-card-h mx-pad">
-              <h2>{callId === "—" ? "No session" : <Link href={`/sessions/${encodeURIComponent(callId)}?tab=events`}>{s?.title ?? callId}</Link>}</h2>
-              <span className="muted small">{s?.category ? `${s.category} · ` : ""}{rs.length} decision{rs.length === 1 ? "" : "s"}</span>
-            </div>
-            <table className="p-table wf-runs">
-              <thead><tr><th>Decision</th><th>When</th>{cols.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
-              <tbody>
-                {rs.map((r) => (
-                  <tr key={r.id}>
-                    <td className="p-wide"><b className="mono">{r.key ?? ""}</b> {r.title}</td>
-                    <td className="small muted">{when(r.at)}</td>
-                    {cols.map((c) => { const st = r.steps.find((x) => x.key === c.key); return <td key={c.key}>{st ? <Dot s={st} /> : "—"}</td>; })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        );
-      })}
+      <section className="p-card p-flush">
+        <div className="p-card-h mx-pad"><h2>Latest runs</h2><span className="muted small">{totals.runs} decisions · newest first</span></div>
+        <ul className="tk">
+          {(runs as Run[]).slice(0, 12).map((r) => {
+            const s = r.callId ? title.get(r.callId) : undefined;
+            return (
+              <li key={r.id}>
+                <span className="tk-key mono">{r.key ?? "—"}</span>
+                <span className="tk-main"><b>{r.title}</b>{r.callId && <Link href={`/sessions/${encodeURIComponent(r.callId)}?tab=activity`} className="muted small">{s?.title ?? r.callId}</Link>}</span>
+                <span className="tk-steps">{r.steps.filter((x) => x.key !== "meeting").map((x) => <Dot key={x.key} s={x} />)}</span>
+                <span className="muted small">{when(r.at)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
       {!runs.length && <section className="p-card"><div className="p-empty">No runs yet. Lock a decision in a call.</div></section>}
     </>
   );
 }
 
 function Dot({ s }: { s: Step }) {
-  const el = <span className={`wf-dot s-${s.state}`} title={s.detail ?? s.state}><i />{s.state === "skipped" ? "—" : s.state}</span>;
+  const el = <span className={`wf-dot s-${s.state}`} title={`${s.label}: ${s.detail ?? s.state}`}><i />{s.label}</span>;
   return s.url ? <a href={s.url} target="_blank" rel="noreferrer" className="wf-link">{el}</a> : el;
 }

@@ -1,5 +1,6 @@
 import { overview, session, sessions } from "@/lib/platform";
 import { dur } from "@/lib/format";
+import { cacheStats } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /**
@@ -55,4 +56,14 @@ async function summarize(want?: string): Promise<Reply> {
     ],
     links: [{ label: "Open session", href: `/sessions/${encodeURIComponent(pick.id)}` }, { label: "Workflows & events", href: `/sessions/${encodeURIComponent(pick.id)}?tab=events` }],
   };
+}
+
+/** Context for the dock: sessions to pick from (live first), memory size, and how fresh the cache is. */
+export async function GET() {
+  const [list, o] = await Promise.all([sessions(), overview()]);
+  const c = cacheStats();
+  return Response.json({
+    sessions: [...list.filter((s) => s.state === "live"), ...list.filter((s) => s.state !== "live")].slice(0, 30).map((s) => ({ id: s.id, title: s.title, state: s.state })),
+    memories: o.kpi.memories, cache: { views: c.length, newestMs: c.length ? Math.min(...c.map((x) => x.ageMs)) : null },
+  });
 }

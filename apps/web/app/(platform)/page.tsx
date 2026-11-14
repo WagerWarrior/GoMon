@@ -1,12 +1,13 @@
 import Link from "next/link";
 import AutoRefresh from "@/components/platform/AutoRefresh";
-import { overview } from "@/lib/platform";
+import { activity, overview } from "@/lib/platform";
+import Latest from "@/components/platform/Latest";
 import { dur, ms, when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 /** Mission control: the whole company at a glance. One session's live detail lives on its own page. */
 export default async function MissionControlHome() {
-  const o = await overview();
+  const [o, feed] = await Promise.all([overview(), activity(300)]);
   const k = o.kpi; const r = o.reliability;
   const live = o.sessions.filter((s: any) => s.state === "live");
   const pct = (v: number | null) => (v == null ? "—" : `${v}%`);
@@ -56,6 +57,11 @@ export default async function MissionControlHome() {
             ))}
           </tbody></table>
         </div>
+      </section>
+
+      <section className="p-card">
+        <div className="p-card-h"><h2>Latest</h2><span className="muted small">what Gomon just did, across sessions</span></div>
+        <Latest rows={feed} sessions={o.sessions} n={8} />
       </section>
 
       <section className="p-card p-flush">

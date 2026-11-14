@@ -12,7 +12,11 @@ export default function AskDock() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState(""); const [busy, setBusy] = useState(false);
   const end = useRef<HTMLDivElement>(null);
-  const callId = path.startsWith("/sessions/") ? decodeURIComponent(path.split("/")[2] ?? "") : undefined;
+  const onPage = path.startsWith("/sessions/") ? decodeURIComponent(path.split("/")[2] ?? "") : "";
+  const [pick, setPick] = useState<string | null>(null);
+  const [info, setInfo] = useState<{ sessions: { id: string; title: string; state: string }[]; memories: number; cache: { views: number; newestMs: number | null } } | null>(null);
+  const callId = (pick === null ? onPage : pick) || undefined;
+  useEffect(() => { if (!open) return; const get = () => fetch("/api/assist", { cache: "no-store" }).then((r) => r.json()).then(setInfo).catch(() => {}); void get(); const t = setInterval(get, 5000); return () => clearInterval(t); }, [open]);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs, busy]);
   useEffect(() => { const k = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setOpen((o) => !o); } if (e.key === "Escape") setOpen(false); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
 
@@ -25,7 +29,7 @@ export default function AskDock() {
       if (cmd === "think") {
         const r = await fetch("/api/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: ask, memory: true, callId, actor: "Ask Gomon" }) });
         const j = await r.json();
-        setMsgs((m) => [...m, r.ok ? { who: "gomon", lines: [j.answer], meta: `${j.answeredBy === "llm" ? j.model : "from memory"} · ${j.ms}ms · ${j.cited?.length ?? 0} cited`, links: (j.cited ?? []).slice(0, 3).map((c: any) => ({ label: c.key ?? "memory", href: "/memory" })) } : { who: "gomon", lines: [j.error ?? "Failed"] }]);
+        setMsgs((m) => [...m, r.ok ? { who: "gomon", lines: [j.answer], meta: `${j.answeredBy === "llm" ? j.model : "from memory"} · ${j.ms}ms · ${j.cited?.length ?? 0} cited`, links: (j.cited ?? []).slice(0, 4).map((c: any) => ({ label: c.key ?? "memory", href: `/database/memories?id=${encodeURIComponent(c.id)}` })) } : { who: "gomon", lines: [j.error ?? "Failed"] }]);
       } else {
         const r = await fetch("/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cmd, callId }) });
         const j = await r.json();
@@ -40,9 +44,16 @@ export default function AskDock() {
       <button className="ad-fab" aria-expanded={open} onClick={() => setOpen(!open)}><span className="ad-led" />Ask Gomon<kbd>⌘K</kbd></button>
       {open && (
         <aside className="ad-panel" aria-label="Ask Gomon">
-          <div className="ad-h"><b>Ask Gomon</b><span className="muted small">{callId ? "this session" : "whole workspace"}</span><button className="ad-x" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
+          <div className="ad-h"><b>Ask Gomon</b>
+            <select className="ad-pick" value={callId ?? ""} onChange={(e) => setPick(e.target.value)} aria-label="Which session">
+              <option value="">Whole workspace</option>
+              {(info?.sessions ?? []).map((s) => <option key={s.id} value={s.id}>{s.state === "live" ? "● " : ""}{s.title}</option>)}
+              {onPage && !(info?.sessions ?? []).some((s) => s.id === onPage) && <option value={onPage}>This session</option>}
+            </select>
+            <button className="ad-x" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
+          <div className="ad-ctx"><span className="sb-led" style={{ background: "var(--leaf)" }} />{info ? <>Atlas · {info.memories} active memories · cache {info.cache.views} views, newest {info.cache.newestMs == null ? "—" : info.cache.newestMs < 1000 ? `${info.cache.newestMs} ms` : `${Math.round(info.cache.newestMs / 1000)} s`} old · <a href="/database">check</a></> : "connecting…"}</div>
           <div className="ad-body">
-            {!msgs.length && <div className="ad-empty"><b>What do you need?</b><span className="muted small">Status and Summarize answer from Atlas instantly. Think asks Gomon with team memory.</span></div>}
+            {!msgs.length && <div className="ad-empty"><b>What do you need?</b><span className="muted small">Summarize and Status answer straight from Atlas. Ask anything else and Gomon searches team memory (vector + text) and cites what it used.</span></div>}
             {msgs.map((m, i) => (
               <div key={i} className={`ad-msg ${m.who}`}>
                 {m.title && <b>{m.title}</b>}
