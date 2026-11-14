@@ -9,6 +9,8 @@ export type Trace = {
   knowledgeHits: number; knowledgeMs: number;
   records: number; openIssues: number;
   model: string; modelMs: number; totalMs: number;
+  /** When the first sentence went to the voice, counted from the question (null: the answer was spoken in one piece). */
+  firstMs?: number | null;
 };
 
 const secs = (ms: number) => `${(Math.max(0, ms) / 1000).toFixed(1)} s`;
@@ -29,7 +31,7 @@ export function traceLine(name: string, t: Trace): string {
     memory,
     ...(t.memoryOn ? [`past meetings and ADRs: ${t.knowledgeHits} ${t.knowledgeHits === 1 ? "hit" : "hits"} in ${secs(t.knowledgeMs)}`] : []),
     `read ${t.records} team records, ${t.openIssues} open GitHub ${t.openIssues === 1 ? "issue" : "issues"}`,
-    `${modelLabel(t.model)} wrote the answer in ${secs(t.modelMs)}`,
+    `${modelLabel(t.model)} wrote the answer in ${secs(t.modelMs)}${t.firstMs != null ? `, first sentence to the voice at ${secs(t.firstMs)}` : ""}`,
   ];
   return `${name} · how I answered (${secs(t.totalMs)}): ${steps.join(" · ")}`;
 }

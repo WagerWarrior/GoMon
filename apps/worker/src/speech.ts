@@ -21,6 +21,23 @@ export function spokenLine(text: string, cut = false): string {
   return out.trim();
 }
 
+/**
+ * While the answer is still being written: its first whole sentence, ready to be spoken, or null when it is not complete yet.
+ * A sentence counts as complete only once the next one has started (same rule as above, so "0.8 ms" and "github.com" never
+ * end one). Under four words ("Yes.", "Sure thing.") it is not worth a clip of its own: the whole answer is spoken together.
+ */
+export function firstSentence(raw: string): string | null {
+  const m = /^([\s\S]+?[.!?]["”’]?)\s+(?=["“(]?[A-Z])/.exec(raw.trimStart());
+  if (!m) return null;
+  const s = spokenLine(m[1]);
+  return count(s) >= 4 ? s : null;
+}
+
+/** What is left to say of the finished answer after its first sentence was spoken early ("" when nothing is). */
+export function restAfter(full: string, first: string): string {
+  return full.startsWith(first) ? full.slice(first.length).trim() : "";
+}
+
 /** GitHub issues the line names ("issue 25", "#25", "ticket number 25"), as links for the Meet chat. */
 export function issueLinks(text: string, repo: string): { number: number; url: string }[] {
   const nums = new Set<number>();

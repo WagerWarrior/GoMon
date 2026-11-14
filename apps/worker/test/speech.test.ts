@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { issueLinks, spokenLine } from "../src/speech.ts";
+import { firstSentence, issueLinks, restAfter, spokenLine } from "../src/speech.ts";
 
 test("a link is never read aloud", () => {
   assert.equal(spokenLine("Here's the direct link, issue #25: https://github.com/WagerWarrior/MongoDB/issues/25, and I'm posting it in the Meet chat now."),
@@ -24,4 +24,39 @@ test("issues named in a line become links", () => {
   assert.deepEqual(issueLinks("D-09 is tracked in issue 25, and #27 covers D-12.", "WagerWarrior/MongoDB").map((l) => l.url),
     ["https://github.com/WagerWarrior/MongoDB/issues/25", "https://github.com/WagerWarrior/MongoDB/issues/27"]);
   assert.deepEqual(issueLinks("D-12 allows 3,000 requests a second for 60 seconds.", "o/r"), []);
+});
+
+test("the first sentence is ready only once the next one has started", () => {
+  assert.equal(firstSentence("D-09 says no synchronous writes to billing."), null);
+  assert.equal(firstSentence("D-09 says no synchronous writes to billing. "), null);
+  assert.equal(firstSentence("D-09 says no synchronous writes to billing. I"), "D-09 says no synchronous writes to billing.");
+  assert.equal(firstSentence("D-09 says no synchronous writes to billing. Issue 25 tracks"), "D-09 says no synchronous writes to billing.");
+});
+
+test("a period inside a number or a domain does not end the first sentence", () => {
+  assert.equal(firstSentence("It adds about 0.8 ms at p99, within C-03. Redis"), "It adds about 0.8 ms at p99, within C-03.");
+  assert.equal(firstSentence("The repo is on github.com and it has eight open"), null);
+});
+
+test("a very short opener is not spoken on its own", () => {
+  assert.equal(firstSentence("Yes. Eight are open"), null);
+  assert.equal(firstSentence("Sure thing. D-09 says"), null);
+});
+
+test("the first sentence is made voice-safe like the whole answer (no link, no #)", () => {
+  assert.equal(firstSentence("Ticket D-09 is issue #25 (https://github.com/o/r/issues/25) and open. It"), "Ticket D-09 is issue 25 and open.");
+});
+
+test("what is left after the first sentence; nothing when the answer was one sentence or was shortened differently", () => {
+  const first = "D-09 says no synchronous writes to billing.";
+  assert.equal(restAfter(`${first} Issue 25 tracks it.`, first), "Issue 25 tracks it.");
+  assert.equal(restAfter(first, first), "");
+  assert.equal(restAfter("Something else entirely.", first), "");
+});
+
+test("first sentence plus rest is exactly the whole spoken answer", () => {
+  const raw = "D-17 locks one global Atlas cluster with zone sharding. Issue #24 tracks it, and it is still unassigned. A third sentence that is dropped.";
+  const first = firstSentence(raw)!;
+  const full = spokenLine(raw);
+  assert.equal(`${first} ${restAfter(full, first)}`, full);
 });

@@ -16,7 +16,9 @@ import { say } from "./agent.ts";
 import { templateFor } from "./templates.ts";
 import { buildWindow } from "./window.ts";
 import { agentProfile } from "./profile.ts";
-import { issueLinks, spokenLine } from "./speech.ts";
+import { firstSentence, issueLinks, restAfter, spokenLine } from "./speech.ts";
+import { readStream, type StreamUsage } from "./stream.ts";
+import { prerender } from "./voice.ts";
 import { postToMeetingChat } from "./links.ts";
 import { chatTraceOn, traceLine } from "./trace.ts";
 
@@ -29,7 +31,7 @@ const timed = <T>(p: Promise<T>) => { const s = Date.now(); return p.then((v) =>
 const ACTION = /\b(lock (it|that|this)|create|file|post|correct|forget|send|drop|share|paste|open (a|an|the)|assign|close|merge|remind|schedule|add (a|an|the|to)|attach|turn\b.{0,40}\binto|make (a|an|it)|divert|link|url)\b/i;
 const NO_ANSWER = "I don't have anything on that yet.";
 
-type MessagesResponse = { content?: { type: string; text?: string }[]; stop_reason?: string; error?: { message: string }; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } };
+type MessagesResponse = { error?: { message: string } };
 
 /** True when this utterance should be answered by the fast lane (decided at ingest, stored as `fastReply`). */
 export function wantsFastReply(text: string): boolean {
@@ -54,7 +56,8 @@ export async function fastReply(ctx: Ctx, u: Asked, dry = false): Promise<string
   state(ctx, u.callId, "searching memory, tickets and past meetings");
   const slow = setTimeout(() => void say(ctx, u.callId, "Still working on that, one moment.", "ack", "normal", u._id).catch(() => {}), SLOW_MS);
   try {
-    return await answer(ctx, u, false);
+    // The "still working" line is dropped the moment the first sentence is spoken.
+    return await answer(ctx, u, false, () => clearTimeout(slow));
   } catch (e) {
     await say(ctx, u.callId, "Sorry, I couldn't finish that answer. Ask me again.", "addressed", "high", u._id).catch(() => {});
     throw e;
@@ -63,7 +66,7 @@ export async function fastReply(ctx: Ctx, u: Asked, dry = false): Promise<string
   }
 }
 
-async function answer(ctx: Ctx, u: Asked, dry: boolean): Promise<string> {
+async function answer(ctx: Ctx, u: Asked, dry: boolean, onSpeaking: () => void = () => {}): Promise<string> {
   const t0 = Date.now();
   // Everything is fetched at once. The call document used to be read first (one Atlas round trip, ~100 ms, before any search
   // started); memory is on for nearly every call, so the searches start now and are dropped if this call has it off.
@@ -98,11 +101,28 @@ async function answer(ctx: Ctx, u: Asked, dry: boolean): Promise<string> {
     { title: "CALL SO FAR", lines: typeof call?.summary === "string" && call.summary ? [call.summary] : [], budget: 250, keep: "head" },
     { title: "OPEN CALL ITEMS (said in this call, not locked yet)", lines: open.map((i) => `- [${i.status}] ${i.kind}: ${i.text}`), budget: 300, keep: "head" },
     { title: "TEAM MEMORY", lines: memories.map((m) => `- ${m.key ?? "-"} (${m.kind}): ${m.text}`), budget: 500, keep: "head", empty: "(none matched)" },
-    { title: "TEAM RECORDS (filed tickets, memory index of every project, GitHub issues, past calls)", lines: workspace.sources.map((s) => `- ${s.line}`), budget: 3600, keep: "head" },
     { title: "PAST MEETINGS AND ADRS (semantic search)", lines: knowledge.map((k) => `- ${k.line}`), budget: 500, keep: "head", empty: "(none)" },
     { title: "RECENT TURNS (already answered)", lines: turns.map((t) => t.line), budget: 700, keep: "tail" },
   ]);
-  const context = win.text;
+  // The team records are the same from one question to the next, so they go first as their own block and the model API
+  // keeps them cached (with the instruction set) for five minutes: later questions start writing sooner.
+  const records = buildWindow([
+    { title: "TEAM RECORDS (filed tickets, memory index of every project, GitHub issues, past calls)", lines: workspace.sources.map((s) => `- ${s.line}`), budget: 3600, keep: "head" },
+  ]);
+  const voiceCtx = { ...ctx, voiceId: tpl.voiceId };
+  // Grounding: every memory key said out loud must be a real active memory, except a key the asker named themself
+  // ("there's no D-17 yet" is the right answer to "what about D17?"). Returns the keys that are not real.
+  const asked = new Set([...u.text.matchAll(/\b([a-z])[\s-]?(\d{1,3})\b/gi)].map((m) => `${m[1].toUpperCase()}-${m[2].padStart(2, "0")}`));
+  const ungrounded = async (line: string): Promise<string[]> => {
+    const keys = [...new Set([...line.matchAll(/\b([A-Z])-(\d{2,3})\b/g)].map((m) => m[0]))].filter((k) => !asked.has(k));
+    if (!keys.length) return [];
+    const active = await ctx.c.memories.countDocuments({ teamId: ctx.teamId, status: "active", key: { $in: keys } });
+    return active < keys.length ? keys : [];
+  };
+  const dropped = async (line: string, keys: string[]) => {
+    if (dry) console.error(`[ask] ungrounded, dropped: ${line} (cited ${keys.join(", ")})`);
+    else await ctx.c.agentEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "ungrounded_reply_dropped", reply: line, cited: keys });
+  };
   if (!dry) state(ctx, u.callId, "writing the answer");
   const tModel = Date.now();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -112,6 +132,7 @@ async function answer(ctx: Ctx, u: Asked, dry: boolean): Promise<string> {
     body: JSON.stringify({
       model: config.analyzeModel,
       max_tokens: 140,
+      stream: true,
       ...modelTuning(),
       system: `${agentProfile(config.agentName)}
 
@@ -132,32 +153,71 @@ ${tpl.persona}
 - The question is the LAST line, under "ANSWER THIS NOW". Everything in RECENT TURNS is over: never answer one of those again.
 - A question about something outside the team and this call (weather, news, general knowledge), or one nothing in front of
   you covers: say exactly "${NO_ANSWER}" and nothing else.`,
-      messages: [{ role: "user", content: `${context}\n\nANSWER THIS NOW (only this):\n${u.speaker.displayName} (to you): ${u.text}` }],
+      messages: [{ role: "user", content: [
+        { type: "text", text: records.text, cache_control: { type: "ephemeral" } },
+        { type: "text", text: `${win.text}\n\nANSWER THIS NOW (only this):\n${u.speaker.displayName} (to you): ${u.text}` },
+      ] }],
     }),
   });
-  const body = (await res.json()) as MessagesResponse;
+  if (!res.ok || !res.body) {
+    const body = (await res.json().catch(() => ({}))) as MessagesResponse;
+    throw new Error(`Anthropic ${res.status}: ${body.error?.message ?? "unknown error"}`);
+  }
+  // Streamed (Max, Nov 14). Measured the same day on Sonnet 5.5: an answer this short does not arrive word by word. One
+  // character comes at the first token (0.5-0.9 s), then the whole text in one burst about 0.65 s later, so the first sentence
+  // is known only ~10 ms before the end. Speaking it early would gain nothing and put a pause between two clips, so it is off
+  // unless SPEAK_FIRST_SENTENCE=on (worth it only if answers get longer). What does help is the cached records block:
+  // 4,770 of 4,856 input tokens were read from the cache on the second question, and the answer came 0.2-0.3 s sooner.
+  let raw = "";
+  let firstMs: number | null = null;
+  let early: Promise<string | null> | null = null;
+  const speakEarly = async (first: string): Promise<string | null> => {
+    if (first === NO_ANSWER) return null;
+    if (!dry) prerender(first, tpl.voiceId); // the voice renders while the keys are checked
+    if ((await ungrounded(first)).length) return null; // held back: the whole answer is checked and dropped below
+    firstMs = Date.now() - t0;
+    if (!dry) {
+      onSpeaking();
+      await say(voiceCtx, u.callId, first, "addressed", "high", u._id);
+    }
+    return first;
+  };
+  let stream: { stopReason?: string; usage: StreamUsage } = { usage: {} };
+  try {
+    stream = await readStream(res.body as unknown as AsyncIterable<Uint8Array>, (delta) => {
+      raw += delta;
+      if (early || process.env.SPEAK_FIRST_SENTENCE !== "on") return;
+      const first = firstSentence(raw);
+      if (first) early = speakEarly(first).catch((e) => (console.error("[fast] first sentence:", e instanceof Error ? e.message : e), null));
+    });
+  } catch (e) {
+    // The stream broke after the first sentence was already spoken: finish with what arrived, do not apologise over it.
+    if (!(early && (await early))) throw e;
+    stream.stopReason = "max_tokens";
+  }
   const modelMs = Date.now() - tModel;
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${body.error?.message ?? "unknown error"}`);
+  const spoken = early ? await early : null;
   // The meter: what was in the window for this answer, section by section, next to the API's real token counts.
   if (!dry) void ctx.c.agentEvents.insertOne({
     callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "context_window", lane: "fast",
-    sections: win.use, estimatedTokens: win.tokens, droppedLines: win.dropped,
-    inputTokens: body.usage?.input_tokens ?? null, outputTokens: body.usage?.output_tokens ?? null, model: config.analyzeModel,
+    sections: [...records.use, ...win.use], estimatedTokens: records.tokens + win.tokens, droppedLines: records.dropped + win.dropped,
+    inputTokens: stream.usage.input_tokens ?? null, outputTokens: stream.usage.output_tokens ?? null, cachedTokens: stream.usage.cache_read_input_tokens ?? 0,
+    firstSentenceMs: firstMs, model: config.analyzeModel,
   }).catch((e) => console.error("[window]", e instanceof Error ? e.message : e));
   // Spoken answers: whole sentences, about 42 words at most, no links (speech.ts).
-  let text = spokenLine(body.content?.find((b) => b.type === "text")?.text?.trim() ?? "", body.stop_reason === "max_tokens");
-  if (!text) text = NO_ANSWER;
-  // Grounding: every memory key said out loud must be a real active memory, except a key the asker named themself
-  // ("there's no D-17 yet" is the right answer to "what about D17?").
-  const asked = new Set([...u.text.matchAll(/\b([a-z])[\s-]?(\d{1,3})\b/gi)].map((m) => `${m[1].toUpperCase()}-${m[2].padStart(2, "0")}`));
-  const keys = [...new Set([...text.matchAll(/\b([A-Z])-(\d{2,3})\b/g)].map((m) => m[0]))].filter((k) => !asked.has(k));
-  if (keys.length) {
-    const active = await ctx.c.memories.countDocuments({ teamId: ctx.teamId, status: "active", key: { $in: keys } });
-    if (active < keys.length) {
-      if (dry) console.error(`[ask] ungrounded, dropped: ${text} (cited ${keys.join(", ")})`);
-      else await ctx.c.agentEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "ungrounded_reply_dropped", reply: text, cited: keys });
-      text = NO_ANSWER;
-    }
+  let full = spokenLine(raw.trim(), stream.stopReason === "max_tokens");
+  // "I don't have anything on that yet" stands alone: nothing is added after it.
+  if (!full || (!spoken && full.startsWith(NO_ANSWER))) full = NO_ANSWER;
+  let rest = "";
+  let text = full;
+  if (spoken) {
+    rest = restAfter(full, spoken);
+    const bad = rest ? await ungrounded(rest) : [];
+    if (bad.length) { await dropped(rest, bad); rest = ""; }
+    text = rest ? `${spoken} ${rest}` : spoken;
+  } else {
+    const bad = await ungrounded(text);
+    if (bad.length) { await dropped(text, bad); text = NO_ANSWER; }
   }
   // Links never go through the voice: every GitHub issue the answer names is posted in the Meet chat, once per call.
   // At most three per answer: "eight are open, 18 through 25" must not fill the chat.
@@ -167,7 +227,7 @@ ${tpl.persona}
     memoryOn, memoryKeys: memories.map((m) => String(m.key ?? "")).filter(Boolean), memoryMs: foundT.ms,
     knowledgeHits: knowledge.length, knowledgeMs: knowledgeT.ms,
     records: workspace.sources.length, openIssues: workspace.sources.filter((s) => /^issue #\d+ \[open\]/.test(s.line)).length,
-    model: config.analyzeModel, modelMs, totalMs: Date.now() - t0,
+    model: config.analyzeModel, modelMs, firstMs, totalMs: Date.now() - t0,
   });
   if (dry) {
     console.error(`[ask] trace: ${trace}`);
@@ -180,7 +240,13 @@ ${tpl.persona}
       await postToMeetingChat(ctx, u.callId, `Issue #${l.number}: ${l.url}`, { url: l.url, label: `Issue #${l.number}`, source: "action" });
     })().catch((e) => console.error("[link]", e instanceof Error ? e.message : e));
   }
-  await say({ ...ctx, voiceId: tpl.voiceId }, u.callId, text, "addressed", "high", u._id);
+  if (!spoken) await say(voiceCtx, u.callId, text, "addressed", "high", u._id);
+  else if (rest) {
+    // Someone cut the first sentence off while the second was being written: the rest stays unsaid.
+    const cutOff = await ctx.c.says.findOne({ callId: u.callId, utteranceId: u._id, reason: "addressed", status: "cancelled" }, { projection: { _id: 1 } });
+    if (!cutOff) await say(voiceCtx, u.callId, rest, "addressed", "high", u._id);
+  }
+  if (firstMs !== null) void ctx.c.timings.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, stage: "fast_first_sentence", ms: firstMs, at: new Date(), utteranceId: u._id }).catch(() => {});
   // After the voice is queued, so the trace never delays the answer.
   if (chatTraceOn()) void postToMeetingChat(ctx, u.callId, trace).catch((e) => console.error("[trace]", e instanceof Error ? e.message : e));
   await ctx.c.timings.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, stage: "fast_reply", ms: Date.now() - t0, at: new Date(), utteranceId: u._id });

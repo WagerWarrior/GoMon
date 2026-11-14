@@ -11,6 +11,11 @@ test("the trace names each step, its result and its time in seconds", () => {
   );
 });
 
+test("when the first sentence was spoken early, the trace says when", () => {
+  assert.match(traceLine("Gomon", { ...t, firstMs: 1180 }), /Sonnet 5\.5 wrote the answer in 1\.6 s, first sentence to the voice at 1\.2 s$/);
+  assert.doesNotMatch(traceLine("Gomon", { ...t, firstMs: null }), /first sentence/);
+});
+
 test("no hits and one hit read correctly", () => {
   const line = traceLine("Gomon", { ...t, memoryKeys: [], knowledgeHits: 1, openIssues: 1 });
   assert.match(line, /Atlas memory search: no hits in 0\.2 s/);
