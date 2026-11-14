@@ -55,11 +55,11 @@ export type Frame = { state: CardState; elapsedMs: number; frame: number; detail
 const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch] ?? ch);
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
-/** "0.6 s" under 10 s, then "12 s", then "1:05". */
+/** Same units as the dashboard (apps/web/lib/format.ts): "0.6s" under 10 s, then "12s", then "1:05". */
 export function clock(ms: number): string {
   const s = Math.max(0, ms) / 1000;
-  if (s < 10) return `${s.toFixed(1)} s`;
-  if (s < 60) return `${Math.floor(s)} s`;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  if (s < 60) return `${Math.floor(s)}s`;
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 }
 
@@ -116,7 +116,7 @@ export function cardSvg(f: Frame): string {
       (sweep > 0.5 ? `<path d="${arc(cx, cy, R, 0, sweep)}" fill="none" stroke="${GREEN}" stroke-width="5" stroke-linecap="round"/>` : "");
     gaze = [0, 2.5];
     line = "Say “wait” to stop it";
-    meter = `${Math.ceil(left / 1000)} s`;
+    meter = `${Math.ceil(left / 1000)}s`;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">

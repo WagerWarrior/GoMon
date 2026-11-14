@@ -14,13 +14,13 @@ test("thinking animates: the lit dot moves each frame and the timer counts", () 
   const f = (frame: number, elapsedMs: number) => cardSvg({ state: "thinking", elapsedMs, frame, detail: "heard Max, checking team memory" });
   assert.notEqual(f(0, 0), f(1, 0));
   assert.equal(f(0, 0), f(3, 0)); // three dots, then round again
-  assert.match(f(0, 1400), />1\.4 s</);
+  assert.match(f(0, 1400), />1.4s</);
   assert.match(f(0, 1400), /heard Max, checking team memory/);
 });
 
 test("locking counts the 10 s veto window down to zero", () => {
-  assert.match(cardSvg({ state: "locking", elapsedMs: 3200, frame: 3 }), />7 s</);
-  assert.match(cardSvg({ state: "locking", elapsedMs: 20_000, frame: 20 }), />0 s</);
+  assert.match(cardSvg({ state: "locking", elapsedMs: 3200, frame: 3 }), />7s</);
+  assert.match(cardSvg({ state: "locking", elapsedMs: 20_000, frame: 20 }), />0s</);
 });
 
 test("listening is one still frame; the others animate", () => {
@@ -30,7 +30,7 @@ test("listening is one still frame; the others animate", () => {
 });
 
 test("clock", () => {
-  assert.deepEqual([600, 12_300, 65_000].map(clock), ["0.6 s", "12 s", "1:05"]);
+  assert.deepEqual([600, 12_300, 65_000].map(clock), ["0.6s", "12s", "1:05"]);
 });
 
 test("detail text is escaped and clipped", () => {
