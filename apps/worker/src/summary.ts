@@ -2,7 +2,7 @@
  * Rolling call summary on `calls.summary`, so the model sees the whole call and not only the last RECENT_TURNS lines.
  * Refreshed off the critical path every SUMMARY_EVERY utterances: previous summary + new turns -> new summary (one small call).
  */
-import { config } from "./config.ts";
+import { config, modelTuning } from "./config.ts";
 import type { Ctx } from "./governance.ts";
 
 const SUMMARY_EVERY = 12;
@@ -30,7 +30,7 @@ export async function maybeRefreshSummary(ctx: Ctx, callId: string, latestSeq: n
       body: JSON.stringify({
         model: config.analyzeModel,
         max_tokens: 400,
-        thinking: { type: "disabled" }, // the model thinks by default and would spend the whole budget before writing
+        ...modelTuning(), // thinking off (Haiku) or medium effort: left alone it can spend the whole budget before writing
         system: "You maintain a running summary of a live engineering design call for an AI participant. Transcripts are raw " +
           "speech-to-text. Write at most 120 words, plain text: topics covered in order, proposals and who made them, agreements, " +
           "open questions, and anything asked of the AI. Keep names and numbers exact. Drop small talk and setup chatter.",

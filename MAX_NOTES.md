@@ -49,6 +49,13 @@ Verified: worker typecheck 0, `npm test` 33/33 (`test/floor.test.ts`, `test/peop
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 
+## For Rob: Gomon now runs on Sonnet 5.5, medium effort (Max, 2026-11-14)
+Default model is `claude-sonnet-5-5` in the worker (fast lane, analysis, summary) and the web Ask box. Measured on the fast
+lane's request: 1.4-1.5 s per answer vs 0.8-0.9 s on Haiku 5.5. Max accepts a little slower for smarter.
+- **Check your `.env`:** if it has `ANALYZE_MODEL=claude-haiku-5-5` (the old `.env.example` line), it still pins Haiku.
+  Delete the line or set `ANALYZE_MODEL=claude-sonnet-5-5`, then restart. `ANALYZE_EFFORT` (default `medium`) sets the effort.
+- Sonnet rejects `thinking: {type: "disabled"}` with HTTP 400; `modelTuning()` in `config.ts` sends the right fields per model.
+
 ## For Rob: pull and restart now (2026-11-14, latest)
 Everything from Max's lane is on main. A fresh checkout of main typechecks and passes the worker tests (33/33).
 **To run it:** `git pull && cd apps/worker && npm i && npm start` (the `npm i` matters: `sharp` draws the animated camera card).

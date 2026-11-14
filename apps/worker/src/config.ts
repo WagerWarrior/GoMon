@@ -13,7 +13,8 @@ export const config = {
   /** Atlas Automated Embedding model (server-side Voyage); used by the memories_auto index at index and query time. */
   embedModel: process.env.EMBED_MODEL || "voyage-4",
   llmKey: () => req("LLM_API_KEY"),
-  analyzeModel: process.env.ANALYZE_MODEL || "claude-haiku-5-5",
+  /** Sonnet 5.5 at medium effort (Max, Nov 14): a little smarter, ~0.4 s slower per answer than Haiku 5.5 (measured). */
+  analyzeModel: process.env.ANALYZE_MODEL || "claude-sonnet-5-5",
   port: Number(process.env.WORKER_PORT || 3001),
   workerToken: process.env.WORKER_TOKEN || "",
   /** Veto window after Gomon announces "Locking in: …". */
@@ -36,5 +37,13 @@ export const config = {
     botVariant: process.env.RECALL_BOT_VARIANT || "web_4_core",
   },
 };
+
+/**
+ * Request fields that differ by model family. Haiku takes `thinking: disabled`; Sonnet and Opus reject that (HTTP 400) and
+ * are kept quick with an effort level instead (ANALYZE_EFFORT, default medium).
+ */
+export function modelTuning(model: string = config.analyzeModel): { thinking?: { type: "disabled" }; output_config?: { effort: string } } {
+  return /haiku/.test(model) ? { thinking: { type: "disabled" } } : { output_config: { effort: process.env.ANALYZE_EFFORT || "medium" } };
+}
 
 export const INDEX = { vector: "memories_auto", text: "memories_text" } as const;

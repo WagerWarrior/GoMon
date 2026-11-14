@@ -6,7 +6,7 @@
 export type Cite = { id: string; key?: string; text: string };
 export type Answer = { text: string; by: "llm" | "retrieval"; model?: string; note?: string };
 
-export const DEFAULT_MODEL = "claude-haiku-5-5"; // same as apps/worker ANALYZE_MODEL; spoken answers need speed
+export const DEFAULT_MODEL = "claude-sonnet-5-5"; // same as apps/worker ANALYZE_MODEL (Sonnet 5.5, medium effort)
 
 export function retrievalAnswer(memory: boolean, cited: Cite[]): Answer {
   if (!memory) return { text: "Memory is off: answering without team context, so no stored decision is checked or cited.", by: "retrieval" };
@@ -31,7 +31,7 @@ export async function answer(question: string, memory: boolean, cited: Cite[], e
     const res = await fetch(`${env.ANTHROPIC_BASE_URL || "https://api.anthropic.com"}/v1/messages`, {
       method: "POST",
       headers: { "x-api-key": env.LLM_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 200, system, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model, max_tokens: 200, system, messages: [{ role: "user", content: user }], ...(/haiku/.test(model) ? {} : { output_config: { effort: "medium" } }) }),
       signal: AbortSignal.timeout(15000),
     });
     const j: any = await res.json().catch(() => null);

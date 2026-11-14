@@ -1,6 +1,6 @@
 // Read-only latency probe of every call the fast reply lane makes. Writes nothing.
 import { connect, cols, close } from "../src/db.ts";
-import { config } from "../src/config.ts";
+import { config, modelTuning } from "../src/config.ts";
 import { retrieve } from "../src/retrieve.ts";
 import { searchKnowledge } from "../src/knowledge.ts";
 import { workspaceFor } from "../src/context.ts";
@@ -22,7 +22,7 @@ for (const q of Q) {
   await t("templateFor", () => templateFor(c, config.teamId, undefined));
   await t("context in parallel (as fast.ts)", () => Promise.all([retrieve(c, ctx, q), searchKnowledge(c, ctx, q, "none"), workspaceFor(ctx, call), templateFor(c, config.teamId, undefined)]));
   console.log(`  "${q.slice(0, 40)}" memories=${mem.length} knowledge=${kn.length}`);
-  const body = { model: config.analyzeModel, max_tokens: 90, thinking: { type: "disabled" }, system: "You are Gomon, an AI teammate in a live call. Answer in one sentence.", messages: [{ role: "user", content: `TEAM MEMORY:\n${mem.map((m) => `- ${m.key}: ${m.text}`).join("\n")}\n\n${q}` }] };
+  const body = { model: config.analyzeModel, max_tokens: 90, ...modelTuning(), system: "You are Gomon, an AI teammate in a live call. Answer in one sentence.", messages: [{ role: "user", content: `TEAM MEMORY:\n${mem.map((m) => `- ${m.key}: ${m.text}`).join("\n")}\n\n${q}` }] };
   const H = { "x-api-key": config.llmKey(), "anthropic-version": "2023-06-01", "content-type": "application/json" };
   const ans = await t("anthropic full reply", async () => { const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: H, body: JSON.stringify(body) }); const j = await r.json() as any; if (!r.ok) throw new Error(JSON.stringify(j)); return j.content.find((b: any) => b.type === "text").text as string; });
   await t("anthropic first token (stream)", async () => { const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: H, body: JSON.stringify({ ...body, stream: true }) }); const rd = r.body!.getReader(); const d = new TextDecoder(); for (;;) { const { value, done } = await rd.read(); if (done || d.decode(value).includes("content_block_delta")) break; } await rd.cancel(); });

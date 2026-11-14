@@ -5,7 +5,7 @@
  * Measured before this lane (live, checkpoint-4): heard -> reply queued 4-10 s. Target: ~2 s, plus TTS.
  */
 import type { ObjectId } from "mongodb";
-import { config } from "./config.ts";
+import { config, modelTuning } from "./config.ts";
 import type { Ctx } from "./governance.ts";
 import { retrieve } from "./retrieve.ts";
 import { workspaceFor } from "./context.ts";
@@ -72,7 +72,7 @@ export async function fastReply(ctx: Ctx, u: { _id: ObjectId; callId: string; se
     body: JSON.stringify({
       model: config.analyzeModel,
       max_tokens: 90,
-      thinking: { type: "disabled" },
+      ...modelTuning(),
       system: `You are ${config.agentName}, an AI teammate speaking out loud in a live engineering design call. ${tpl.persona}
 Answer ONLY what the person just asked, in as few words as it takes (one sentence is usually enough, max 30 words). Never add
 other topics, earlier questions or extra facts. Plain words, contractions, no

@@ -215,7 +215,7 @@ const set = (k: string) => !!process.env[k];
 export function system() {
   return {
     models: [
-      { role: "Reasoning", name: process.env.ANALYZE_MODEL || "claude-haiku-5-5", provider: process.env.LLM_PROVIDER || "Anthropic", ready: set("LLM_API_KEY"), note: "Extracts decisions, checks conflicts, writes what Gomon says." },
+      { role: "Reasoning", name: process.env.ANALYZE_MODEL || "claude-sonnet-5-5", provider: process.env.LLM_PROVIDER || "Anthropic", ready: set("LLM_API_KEY"), note: "Extracts decisions, checks conflicts, writes what Gomon says." },
       { role: "Embeddings", name: process.env.VOYAGE_MODEL || process.env.EMBED_MODEL || "voyage-4", provider: "Voyage AI via Atlas", ready: set("VOYAGE_API_KEY") || true, note: "Atlas automated embedding on memories (vector index memories_auto)." },
       { role: "Voice", name: process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5", provider: "ElevenLabs", ready: set("ELEVENLABS_API_KEY"), note: process.env.ELEVENLABS_VOICE_ID ? "Custom voice selected." : "Default voice." },
       { role: "Transcription", name: `Recall.ai ${process.env.RECALL_BOT_VARIANT || "web_4_core"}`, provider: `Recall ${process.env.RECALL_REGION || "us-west-2"}`, ready: set("RECALL_API_KEY"), note: "Meeting bot joins the call and streams sentences." },
@@ -283,7 +283,7 @@ export function setup() {
   const svc = (name: string, role: string, does: string, keys: string[], value: string) => ({ name, role, does, value, keys: keys.map((k) => ({ k, set: has(k) })), ready: keys.filter((k) => !/MODEL|REGION|VARIANT|VOICE_ID|PROJECT|FORMAT/.test(k)).every(has) });
   return [
     svc("MongoDB Atlas", "Memory and data", "Stores every call, memory and action. Vector search finds relevant memory.", ["MONGODB_URI", "MONGODB_DB"], process.env.MONGODB_DB || "gomon"),
-    svc("Reasoning model", "Thinks", "Reads each turn with recalled memory and decides what to capture or say.", ["LLM_API_KEY", "ANALYZE_MODEL"], process.env.ANALYZE_MODEL || "claude-haiku-5-5"),
+    svc("Reasoning model", "Thinks", "Reads each turn with recalled memory and decides what to capture or say.", ["LLM_API_KEY", "ANALYZE_MODEL"], process.env.ANALYZE_MODEL || "claude-sonnet-5-5"),
     svc("Embeddings", "Searches", "Turns memory into vectors for search inside Atlas.", ["VOYAGE_API_KEY", "VOYAGE_MODEL"], process.env.VOYAGE_MODEL || "voyage-4"),
     svc("Meeting bot", "Hears", "Joins Google Meet, Zoom or Teams through Recall.ai and streams what people say.", ["RECALL_API_KEY", "RECALL_REGION", "RECALL_BOT_VARIANT"], `Recall.ai ${process.env.RECALL_REGION || "us-west-2"}`),
     svc("Voice", "Speaks", "Turns Gomon's lines into speech in the call.", ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "ELEVENLABS_MODEL_ID"], process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5"),

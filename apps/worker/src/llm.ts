@@ -1,5 +1,5 @@
 import { traceable } from "langsmith/traceable";
-import { config } from "./config.ts";
+import { config, modelTuning } from "./config.ts";
 import { GITHUB_OPS, ITEM_KINDS, type GithubOp, type ItemKind } from "./shapes.ts";
 import type { Workspace } from "./context.ts";
 
@@ -180,7 +180,7 @@ export const analyze = traceable(
         max_tokens: 2048,
         system: system(config.agentName, tpl.persona, tpl.captureKinds),
         messages: [{ role: "user", content: user(recent, batch, items, memories, wake, extra) }],
-        output_config: { format: { type: "json_schema", schema: SCHEMA } },
+        output_config: { ...modelTuning().output_config, format: { type: "json_schema", schema: SCHEMA } },
       }),
     });
     const body = (await res.json()) as MessagesResponse;
