@@ -11,8 +11,6 @@ const ICON = {
   mission: I("M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3M8 5.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z"),
   sessions: I("M2.5 4h11M2.5 8h11M2.5 12h7"),
   workflows: I("M2.5 3.5h3v3h-3zM10.5 9.5h3v3h-3zM5.5 5h3a1.5 1.5 0 0 1 1.5 1.5v3"),
-  activity: I("M1.5 8.5h3l2-5 3 9 2-4h3"),
-  actions: I("M3 8h9M8.5 4.5 12 8l-3.5 3.5"),
   database: I("M8 2c3 0 5.5 1 5.5 2.3v7.4C13.5 13 11 14 8 14s-5.5-1-5.5-2.3V4.3C2.5 3 5 2 8 2zM2.5 4.3C2.5 5.6 5 6.6 8 6.6s5.5-1 5.5-2.3M2.5 8c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3"),
   models: I("M5.5 6v4M8 4v8M10.5 6.5v3M3 7.5v1M13 7.5v1"),
   chev: <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden><path d="m6 4 4 4-4 4" /></svg>,
@@ -38,14 +36,13 @@ export default function Sidebar({ team, live }: { team: string; live: { id: stri
           {item("/", "Mission control", ICON.mission)}
           {item("/sessions", "Sessions", ICON.sessions, live.length ? <span className="p-badge">{live.length}</span> : null)}
           {live.slice(0, 6).map((s) => (
-            <Link key={s.id} href={`/sessions/${encodeURIComponent(s.id)}?tab=live`} className="p-sub" aria-current={path === `/sessions/${encodeURIComponent(s.id)}` ? "page" : undefined}><span className="p-subdot" />{s.title}</Link>
+            <Link key={s.id} href={`/sessions/${encodeURIComponent(s.id)}`} className="p-sub" aria-current={path === `/sessions/${encodeURIComponent(s.id)}` || path === `/sessions/${s.id}` ? "page" : undefined}><span className="p-subdot" />{s.title}</Link>
           ))}
           {item("/workflows", "Workflows", ICON.workflows)}
         </div>
         <div className="p-navgroup">
-          <span className="eyebrow">Observe</span>
-          {item("/activity", "Activity", ICON.activity)}
-          {item("/actions", "Actions", ICON.actions)}
+          <span className="eyebrow">Setup</span>
+          {item("/system", "Integrations", ICON.models)}
           <button className="p-nav p-navbtn" aria-expanded={dbOpen} aria-current={on("/database") || on("/memory") ? "page" : undefined} onClick={() => setDbOpen(!dbOpen)}>
             {ICON.database}Database<span className={`p-chev ${dbOpen ? "open" : ""}`}>{ICON.chev}</span>
           </button>
@@ -62,10 +59,6 @@ export default function Sidebar({ team, live }: { team: string; live: { id: stri
               ))}
             </div>
           )}
-        </div>
-        <div className="p-navgroup">
-          <span className="eyebrow">Setup</span>
-          {item("/system", "Models & voice", ICON.models)}
         </div>
       </nav>
       <div className="p-sidefoot">

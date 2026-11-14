@@ -1,6 +1,5 @@
 import Link from "next/link";
 import AutoRefresh from "@/components/platform/AutoRefresh";
-import { Funnel, HBars, TimeArea } from "@/components/platform/Charts";
 import { overview } from "@/lib/platform";
 import { dur, ms, when } from "@/lib/format";
 export const dynamic = "force-dynamic";
@@ -20,7 +19,7 @@ export default async function MissionControlHome() {
 
       <section className="mx-live">
         {live.length ? live.map((s: any) => (
-          <Link key={s.id} href={`/sessions/${encodeURIComponent(s.id)}?tab=live`} className="mx-livecard">
+          <Link key={s.id} href={`/sessions/${encodeURIComponent(s.id)}`} className="mx-livecard">
             <div className="row"><span className="mx-dot" />{s.category}<span className="muted small mx-right">{dur(s.durationMs)}</span></div>
             <b>{s.title}</b>
             <span className="muted small">{[...s.team, ...s.guests].join(", ") || "—"}</span>
@@ -29,12 +28,11 @@ export default async function MissionControlHome() {
         )) : <div className="mx-livecard mx-empty">No live sessions. The most recent was {when(o.sessions[0]?.lastAt)}.</div>}
       </section>
 
-      <section className="p-kpis">
+      <section className="p-kpis p-kpis-5">
         <Kpi label="Sessions" v={k.sessions} />
         <Kpi label="Utterances heard" v={k.utterances} />
         <Kpi label="Decisions locked" v={k.locked} sub={`${o.vetoed} vetoed`} />
         <Kpi label="Team memory" v={k.memories} />
-        <Kpi label="Gomon spoke" v={k.says} />
         <Kpi label="Answer p50" v={ms(k.p50)} />
       </section>
 
@@ -60,30 +58,12 @@ export default async function MissionControlHome() {
         </div>
       </section>
 
-      <section className="p-row p-row-1-1">
-        <div className="p-card">
-          <div className="p-card-h"><h2>Utterances per minute</h2></div>
-          <TimeArea label="utterances" data={o.series.map((b: any) => ({ t: b.t, v: b.n }))} />
-        </div>
-        <div className="p-card">
-          <div className="p-card-h"><h2>End-to-end latency</h2></div>
-          <TimeArea label="latency" data={o.latency.map((l: any) => ({ t: l.at, v: l.ms }))} unit="ms" />
-        </div>
-      </section>
-
-      <section className="p-row p-row-3">
-        <div className="p-card"><div className="p-card-h"><h2>Decision funnel</h2></div><Funnel steps={o.funnel} /></div>
-        <div className="p-card"><div className="p-card-h"><h2>Pipeline latency</h2><span className="muted small">p50 · tick p95</span></div>
-          <HBars rows={o.stages.map((s: any) => ({ label: s.stage.replace(/_/g, " "), v: s.p50 ?? 0, tick: s.p95, note: `${s.n} runs` }))} unit="ms" tickLabel="p95" /></div>
-        <div className="p-card"><div className="p-card-h"><h2>Memory by kind</h2></div><HBars rows={o.memKinds.map((m: any) => ({ label: m.label.replace(/_/g, " "), v: m.n }))} /></div>
-      </section>
-
       <section className="p-card p-flush">
         <div className="p-card-h mx-pad"><h2>Recent sessions</h2><Link href="/sessions" className="p-more">All sessions</Link></div>
         <table className="p-table">
           <thead><tr><th>Session</th><th>Type</th><th>People</th><th>Length</th><th className="num">Heard</th><th className="num">Locked</th><th>State</th></tr></thead>
           <tbody>
-            {o.sessions.slice(0, 8).map((s: any) => (
+            {o.sessions.filter((x: any) => x.state !== "live").slice(0, 6).map((s: any) => (
               <tr key={s.id}>
                 <td><Link href={`/sessions/${encodeURIComponent(s.id)}`} className="p-rowlink">{s.title}</Link><span className="muted small p-id">{s.id}</span></td>
                 <td>{s.category}</td><td>{[...s.team, ...s.guests].join(", ") || "—"}</td><td className="mono">{dur(s.durationMs)}</td>

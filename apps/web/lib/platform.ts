@@ -265,7 +265,7 @@ export function setup() {
     svc("MongoDB Atlas", "Memory and data", "Stores every call, memory and action. Vector search finds relevant memory.", ["MONGODB_URI", "MONGODB_DB"], process.env.MONGODB_DB || "gomon"),
     svc("Reasoning model", "Thinks", "Reads each turn with recalled memory and decides what to capture or say.", ["LLM_API_KEY", "ANALYZE_MODEL"], process.env.ANALYZE_MODEL || "claude-haiku-5-5"),
     svc("Embeddings", "Searches", "Turns memory into vectors for search inside Atlas.", ["VOYAGE_API_KEY", "VOYAGE_MODEL"], process.env.VOYAGE_MODEL || "voyage-4"),
-    svc("Meeting bot", "Hears", "Joins the meeting and streams what people say.", ["RECALL_API_KEY", "RECALL_REGION", "RECALL_BOT_VARIANT"], `Recall.ai ${process.env.RECALL_REGION || "us-west-2"}`),
+    svc("Meeting bot", "Hears", "Joins Google Meet, Zoom or Teams through Recall.ai and streams what people say.", ["RECALL_API_KEY", "RECALL_REGION", "RECALL_BOT_VARIANT"], `Recall.ai ${process.env.RECALL_REGION || "us-west-2"}`),
     svc("Voice", "Speaks", "Turns Gomon's lines into speech in the call.", ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "ELEVENLABS_MODEL_ID"], process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5"),
     svc("Slack", "Sends", "Posts locked decisions into the call's thread.", ["SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"], process.env.SLACK_CHANNEL_ID ? "channel set" : "no channel"),
     svc("GitHub", "Sends", "Opens an issue for each locked decision.", ["GITHUB_TOKEN", "GITHUB_REPO"], process.env.GITHUB_REPO || "no repo"),

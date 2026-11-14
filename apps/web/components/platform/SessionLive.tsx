@@ -8,8 +8,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Op, Verb } from "@/lib/mission";
 
 type Data = { now: string; callId: string | null; ops: Op[]; context: any };
-type StageKey = "hear" | "search" | "think" | "write" | "lock" | "speak" | "send";
-const STAGES: { key: StageKey; title: string; verbs: Verb[]; where: string }[] = [
+export type StageKey = "hear" | "search" | "think" | "write" | "lock" | "speak" | "send";
+export const STAGES: { key: StageKey; title: string; verbs: Verb[]; where: string }[] = [
   { key: "hear", title: "Hear", verbs: ["LISTEN", "OPERATOR", "WAKE"], where: "utterances" },
   { key: "search", title: "Search memory", verbs: ["SEARCH"], where: "memories · vector + text" },
   { key: "think", title: "Think", verbs: ["THINK", "FLAG"], where: "reasoning model" },
@@ -18,7 +18,7 @@ const STAGES: { key: StageKey; title: string; verbs: Verb[]; where: string }[] =
   { key: "speak", title: "Speak", verbs: ["SPEAK"], where: "says · voice" },
   { key: "send", title: "Send", verbs: ["SEND"], where: "outbox · connected tools" },
 ];
-const stageOf = (o: Op): StageKey => (o.verb === "OPERATOR" && o.coll === "says" ? "speak" : STAGES.find((s) => s.verbs.includes(o.verb))?.key ?? "think");
+export const stageOf = (o: Op): StageKey => (o.verb === "OPERATOR" && o.coll === "says" ? "speak" : STAGES.find((s) => s.verbs.includes(o.verb))?.key ?? "think");
 const ago = (t: string, now: number) => { const s = Math.max(0, Math.round((now - +new Date(t)) / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`; };
 const clock = (t: string) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
 
@@ -114,7 +114,7 @@ export default function SessionLive({ callId, initial }: { callId: string; initi
 }
 
 /** Small line drawings per stage; CSS animates them while the stage is active (data-on). */
-function Art({ k }: { k: StageKey }) {
+export function Art({ k }: { k: StageKey }) {
   const common = { viewBox: "0 0 64 40", width: 64, height: 40, className: `sl-art a-${k}`, "aria-hidden": true } as const;
   if (k === "hear") return <svg {...common}>{[8, 16, 24, 32, 40, 48, 56].map((x, i) => <rect key={x} x={x - 2} y={12} width="3" height="16" rx="1.5" style={{ animationDelay: `${i * 90}ms` }} />)}</svg>;
   if (k === "search" || k === "write" || k === "lock") return (

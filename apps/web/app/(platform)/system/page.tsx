@@ -21,7 +21,7 @@ export default async function System() {
   const ready = rows.filter((r) => state(r) !== "missing").length;
   return (
     <>
-      <header className="p-head"><div><h1>Models &amp; voice</h1><span className="eyebrow">{ready} of {rows.length} working · keys live in the repo-root .env, never in the browser</span></div></header>
+      <header className="p-head"><div><h1>Integrations</h1><span className="eyebrow">{ready} of {rows.length} working · keys live in the repo-root .env, never in the browser</span></div></header>
       <section className="p-card p-flush">
         <table className="p-table su-table">
           <thead><tr><th>Service</th><th>Role</th><th>Using</th><th>Keys</th><th>Status</th><th></th></tr></thead>
@@ -34,7 +34,9 @@ export default async function System() {
               <td><span className={`su-state s-${state(r)}`}><i />{state(r) === "ready" ? "Ready" : state(r) === "working" ? "Working" : "Missing keys"}</span>{seen[r.name] && <span className="muted small p-id">{seen[r.name]}</span>}</td>
               <td>{state(r) === "missing" ? <KeyHelp name={r.name} missing={r.keys.filter((k) => !k.set).map((k) => k.k)} /> : null}</td>
             </tr>
-          ))}</tbody>
+          ))}
+            <tr><td><b>Email</b><span className="muted small p-id su-does">Email decision summaries after a call.</span></td><td className="small">Sends</td><td className="mono small muted">not built</td><td></td><td><span className="su-state"><i style={{ background: "#d0cec8" }} />Not available yet</span></td><td></td></tr>
+          </tbody>
         </table>
       </section>
       <section className="p-row p-row-1-1">

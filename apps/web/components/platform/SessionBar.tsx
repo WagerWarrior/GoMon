@@ -11,7 +11,7 @@ type Op = { id: string; at: string; verb: string; text: string; who?: string };
 const TABS = [["workspace", "Workspace"], ["live", "Live"], ["events", "Workflows & events"], ["transcript", "Transcript"], ["decisions", "Decisions"], ["timings", "Timings"], ["govern", "Govern"]] as const;
 import { CATEGORIES } from "@/lib/categories";
 
-function pulse(ops: Op[], now: number) {
+export function pulse(ops: Op[], now: number) {
   const age = (o?: Op) => (o ? (now - +new Date(o.at)) / 1000 : Infinity);
   const heard = ops.find((o) => o.verb === "LISTEN" || o.verb === "OPERATOR");
   const doing = ops.find((o) => ["SEARCH", "THINK", "APPEND", "LOCK", "SPEAK", "SEND", "WAKE"].includes(o.verb));

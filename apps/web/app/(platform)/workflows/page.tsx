@@ -3,12 +3,19 @@ import AutoRefresh from "@/components/platform/AutoRefresh";
 import FlowDiagram from "@/components/platform/FlowDiagram";
 import { storedWorkflows, toolName, workflowRuns, type Run, type Step } from "@/lib/workflows";
 import WorkflowToggle from "@/components/platform/WorkflowToggle";
-import { sessions } from "@/lib/platform";
+import { overview, sessions } from "@/lib/platform";
 import { when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 export default async function Workflows() {
-  const [{ runs, tools, totals }, stored, list] = await Promise.all([workflowRuns(), storedWorkflows(), sessions()]);
+  const [{ runs, tools, totals }, stored, list, o] = await Promise.all([workflowRuns(), storedWorkflows(), sessions(), overview()]);
+  const voice = list.filter((x) => x.voice).length;
+  const inputs = [
+    { name: "Meetings", sub: "Recall bot hears the call", n: `${voice} sessions` },
+    { name: "Typed prompts", sub: "operator and chat messages", n: `${list.length - voice} sessions` },
+  ];
+  const brain = [{ k: "utterances", n: o.kpi.utterances }, { k: "memories", n: o.kpi.memories }, { k: "decisions locked", n: o.kpi.locked }];
+  const outputs = [{ name: "Voice", n: `${o.kpi.says} lines` }, ...tools.map((t: any) => ({ name: t.name, n: `${t.done} sent` }))];
   const title = new Map(list.map((s) => [s.id, s]));
   // One group per session: many conversations at once stay readable.
   const groups = new Map<string, Run[]>();
@@ -20,7 +27,18 @@ export default async function Workflows() {
       <header className="p-head"><div><h1>Workflows</h1><span className="eyebrow">Locked decisions, sent to the tools you have connected</span></div></header>
 
       <section className="p-card">
-        <div className="p-card-h"><h2>All sessions</h2><span className="muted small">{totals.runs} decisions · {totals.confirmed} confirmed</span></div>
+        <div className="p-card-h"><h2>What flows into Atlas</h2><span className="muted small">live counts</span></div>
+        <div className="wf-sys">
+          <div className="wf-col"><span className="eyebrow">In</span>{inputs.map((x) => <div key={x.name} className="wf-box"><b>{x.name}</b><span className="muted small">{x.sub}</span><span className="mono small">{x.n}</span></div>)}</div>
+          <div className="wf-arrow" aria-hidden><i /></div>
+          <div className="wf-col"><span className="eyebrow">Atlas brain</span><div className="wf-box wf-brain"><b>MongoDB Atlas</b>{brain.map((x) => <span key={x.k} className="small"><span className="mono">{x.n}</span> {x.k}</span>)}<span className="muted small">governed: lock, veto, audit</span></div></div>
+          <div className="wf-arrow" aria-hidden><i /></div>
+          <div className="wf-col"><span className="eyebrow">Out</span>{outputs.map((x) => <div key={x.name} className="wf-box"><b>{x.name}</b><span className="mono small">{x.n}</span></div>)}</div>
+        </div>
+      </section>
+
+      <section className="p-card">
+        <div className="p-card-h"><h2>Decision path</h2><span className="muted small">{totals.runs} decisions · {totals.confirmed} confirmed</span></div>
         <FlowDiagram runs={runs} />
       </section>
 
@@ -42,11 +60,6 @@ export default async function Workflows() {
         </section>
       )}
 
-      <section className="p-kpis" style={{ gridTemplateColumns: `repeat(${2 + tools.length},minmax(0,1fr))` }}>
-        <div className="p-kpi"><span className="eyebrow">Decisions</span><b>{totals.runs}</b></div>
-        {tools.map((t: any) => <div key={t.type} className="p-kpi"><span className="eyebrow">{t.name}</span><b>{t.done}</b></div>)}
-        <div className="p-kpi"><span className="eyebrow">Confirmed</span><b>{totals.confirmed}</b></div>
-      </section>
 
       {[...groups.entries()].map(([callId, rs]) => {
         const s = title.get(callId);

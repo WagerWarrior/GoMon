@@ -1,5 +1,6 @@
 import { db, scope } from "@/lib/db";
 import { CATEGORIES } from "@/lib/categories";
+import { timeline } from "@/lib/timeline";
 export const dynamic = "force-dynamic";
 
 /** Set a session's category ({ category }). Only the known list is accepted; the change is audited. */
@@ -12,4 +13,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!r.matchedCount) return Response.json({ error: "no such session" }, { status: 404 });
   await d.collection("audit_events").insertOne({ ...sc, callId, at: new Date(), type: "session_categorized", actor: actor || "workspace", reason: category });
   return Response.json({ ok: true, category });
+}
+
+/** The session as a chat timeline (people, Gomon, and Gomon's work inline). Polled by the Live view. */
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return Response.json({ now: new Date().toISOString(), entries: await timeline(decodeURIComponent(id)) });
 }
