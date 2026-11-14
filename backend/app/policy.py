@@ -3,7 +3,7 @@ from .classifier import Decision
 
 APPROVAL_TTL_MS = 5 * 60 * 1000
 MAX_STEPS = 6            # classifier boundaries per turn
-MAX_DRIVER_CALLS = 1     # bounded driver budget per turn
+MAX_REASONER_CALLS = 1     # bounded reasoner budget per turn
 
 
 def gate(d: Decision, s: dict) -> tuple[Decision, str | None]:
@@ -11,9 +11,9 @@ def gate(d: Decision, s: dict) -> tuple[Decision, str | None]:
     if d.route == "RESPOND_NOW" and not s["readThisTurn"] and s["intent"] != "approve_attempt":
         return Decision("VERIFY_EFFECT" if s["commandAcked"] else "READ_STATE", "gate:missing_current_evidence",
                         d.evidence, d.classifier_version, d.probability), "RESPOND_NOW without current evidence"
-    if d.route == "DELEGATE_TO_DRIVER" and s["driverCalls"] >= MAX_DRIVER_CALLS:
-        return Decision("RESPOND_NOW", "gate:driver_budget_exhausted", d.evidence, d.classifier_version,
-                        d.probability), "driver budget exhausted"
+    if d.route == "DELEGATE_TO_REASONER" and s["reasonerCalls"] >= MAX_REASONER_CALLS:
+        return Decision("RESPOND_NOW", "gate:reasoner_budget_exhausted", d.evidence, d.classifier_version,
+                        d.probability), "reasoner budget exhausted"
     return d, None
 
 

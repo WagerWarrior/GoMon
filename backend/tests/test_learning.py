@@ -28,7 +28,7 @@ def test_oracle_labels_follow_spec_table():
     assert oracle.label("close_query", base) == "READ_STATE"
     assert oracle.label("close_query", {**base, "commandAcked": True}) == "VERIFY_EFFECT"
     assert oracle.label("close_query", {**base, "readThisTurn": True}) == "RESPOND_NOW"
-    assert oracle.label("unknown", {**base, "readThisTurn": True}) == "DELEGATE_TO_DRIVER"
+    assert oracle.label("unknown", {**base, "readThisTurn": True}) == "DELEGATE_TO_REASONER"
 
 
 def test_training_only_reads_train_and_validation_and_release_is_reproducible():

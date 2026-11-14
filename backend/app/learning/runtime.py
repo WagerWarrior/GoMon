@@ -1,4 +1,4 @@
-"""Inference for a stored release. Calibrated probability, per-route thresholds, abstain -> driver."""
+"""Inference for a stored release. Calibrated probability, per-route thresholds, abstain -> reasoner."""
 import numpy as np
 
 from ..classifier import Decision
@@ -23,6 +23,6 @@ class TrainedRouter:
         i = int(p.argmax())
         route = F.ROUTES[i]
         ev = snap.get("evidenceIds", [])
-        if p[i] < self.th[route]:  # conservative: abstain to the driver rather than act on a weak route
-            return Decision("DELEGATE_TO_DRIVER", "abstain_below_threshold", ev, self.version, float(p[i]))
+        if p[i] < self.th[route]:  # conservative: abstain to the reasoner rather than act on a weak route
+            return Decision("DELEGATE_TO_REASONER", "abstain_below_threshold", ev, self.version, float(p[i]))
         return Decision(route, "learned_route", ev, self.version, float(p[i]))

@@ -1,7 +1,7 @@
-"""Compare always-driver, bootstrap, and a trained release on identical held-out boundaries.
+"""Compare always-reasoner, bootstrap, and a trained release on identical held-out boundaries.
 
-Reports raw numbers. Latency here is CLASSIFIER OVERHEAD only: the driver is not configured, so no
-end-to-end or driver latency is claimed.
+Reports raw numbers. Latency here is CLASSIFIER OVERHEAD only: the reasoner is not configured, so no
+end-to-end or reasoner latency is claimed.
 """
 import time
 
@@ -15,8 +15,8 @@ def _bootstrap(snap):
     return classifier.classify(s)
 
 
-def _always_driver(snap):
-    return classifier.Decision("DELEGATE_TO_DRIVER", "baseline_always_driver", [], "always-driver")
+def _always_reasoner(snap):
+    return classifier.Decision("DELEGATE_TO_REASONER", "baseline_always_reasoner", [], "always-reasoner")
 
 
 def _metrics(rows, fn):
@@ -27,25 +27,25 @@ def _metrics(rows, fn):
     for r in rows:
         snap = r["snapshot"]
         d = fn(snap)
-        if d.route == "DELEGATE_TO_DRIVER":
+        if d.route == "DELEGATE_TO_REASONER":
             delegate += 1
         correct += d.route == r["label"]
         confusion[f"{r['label']}->{d.route}"] = confusion.get(f"{r['label']}->{d.route}", 0) + 1
         if d.route == "RESPOND_NOW" and r["label"] != "RESPOND_NOW":
             raw_unsafe += 1
-            g, _ = gate(d, {**snap, "intent": r["intent"], "driverCalls": 0, "commandAcked": bool(snap["commandAcked"])})
+            g, _ = gate(d, {**snap, "intent": r["intent"], "reasonerCalls": 0, "commandAcked": bool(snap["commandAcked"])})
             gated_unsafe += g.route == "RESPOND_NOW"
     ms = (time.perf_counter() - t0) * 1000 / n
     unsafe_den = sum(r["label"] != "RESPOND_NOW" for r in rows)
-    return {"n": n, "accuracy": correct / n, "driverCallRate": delegate / n,
+    return {"n": n, "accuracy": correct / n, "reasonerCallRate": delegate / n,
             "unsafeEarlyRaw": raw_unsafe, "unsafeEarlyAfterGate": gated_unsafe, "unsafeDenominator": unsafe_den,
             "classifierOverheadMsPerBoundary": round(ms, 4), "confusion": confusion}
 
 
 def evaluate(rows, release_router, split_name: str):
-    systems = {"always-driver": _always_driver, "bootstrap-v0": _bootstrap, release_router.version: release_router.classify}
-    oracle_delegate = sum(r["label"] == "DELEGATE_TO_DRIVER" for r in rows) / len(rows)
-    return {"split": split_name, "oracleDriverCallRateFloor": oracle_delegate,
+    systems = {"always-reasoner": _always_reasoner, "bootstrap-v0": _bootstrap, release_router.version: release_router.classify}
+    oracle_delegate = sum(r["label"] == "DELEGATE_TO_REASONER" for r in rows) / len(rows)
+    return {"split": split_name, "oracleReasonerCallRateFloor": oracle_delegate,
             "systems": {k: _metrics(rows, f) for k, f in systems.items()}}
 
 

@@ -23,7 +23,7 @@ def pipeline(seed: int = 7, quiet: bool = False) -> dict:
     report = evaluate.evaluate(dataset.load(rev, "test"), TrainedRouter(rel), "test")  # frozen test, evaluated once
     ok, why = evaluate.promotion_decision(report, rel["version"])
     report.update({"datasetRevision": rev, "release": rel["version"], "promoted": ok, "rejectReasons": why,
-                   "at": now_ms(), "driver": "not configured: no end-to-end/driver latency measured"})
+                   "at": now_ms(), "reasoner": "not configured: no end-to-end/reasoner latency measured"})
     db().eval_reports.insert_one(dict(report))
     if ok:
         promote(rel["version"])

@@ -93,7 +93,7 @@ def build(seed: int = 7) -> tuple[str, list[dict]]:
     for fam, spec in FAMILIES.items():
         for intent, utts in spec["u"].items():
             for text, b in itertools.product(utts, BOUNDARIES):
-                snap = {"text": text, "state": b[0], "driverCalls": 0, **dict(zip(FLAGS, b[1:]))}
+                snap = {"text": text, "state": b[0], "reasonerCalls": 0, **dict(zip(FLAGS, b[1:]))}
                 rows.append({"family": fam, "split": spec["split"], "intent": intent, "snapshot": snap,
                              "label": oracle.label(intent, snap), "provenance": PROVENANCE})
     rng.shuffle(rows)
@@ -110,7 +110,7 @@ def store(rev: str, rows: list[dict]) -> None:
     d.insert_many([{**r, "createdAt": now} for r in rows])
     db().dataset_revisions.replace_one({"_id": rev}, {
         "_id": rev, "count": len(rows), "createdAt": now, "provenance": PROVENANCE,
-        "label": "SIMULATED scenario families; oracle labels, no driver-model labels",
+        "label": "SIMULATED scenario families; oracle labels, no reasoner-model labels",
         "splits": {s: sum(r["split"] == s for r in rows) for s in ("train", "validation", "test", "burned_test1")},
         "familiesBySplit": {s: sorted({r["family"] for r in rows if r["split"] == s}) for s in ("train", "validation", "test", "burned_test1")}},
         upsert=True)

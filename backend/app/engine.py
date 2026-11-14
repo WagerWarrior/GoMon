@@ -1,4 +1,4 @@
-"""Turn engine: classify -> gate -> execute -> persist, repeated until a response, a bounded driver step,
+"""Turn engine: classify -> gate -> execute -> persist, repeated until a response, a bounded reasoner step,
 or the step budget. MongoDB holds every fact; the engine keeps no state of its own between calls.
 """
 import threading
@@ -8,7 +8,7 @@ import uuid
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from . import classifier, driver, policy, responses, simulator
+from . import classifier, reasoner, policy, responses, simulator
 from .db import db, now_ms
 
 _routers: dict = {}
@@ -84,12 +84,12 @@ def observe(inc: dict) -> tuple[dict, dict]:
     return out[0], out[1]
 
 
-def _snapshot(inc: dict, intent: str, read_ids: list, driver_calls: int, text: str = "", src=None, disp=None) -> dict:
+def _snapshot(inc: dict, intent: str, read_ids: list, reasoner_calls: int, text: str = "", src=None, disp=None) -> dict:
     cmd = inc.get("command")
     ap = inc.get("approval")
     read = bool(read_ids)
     return {"incidentId": inc["_id"], "revision": inc["revision"], "state": inc["state"], "intent": intent,
-            "text": text, "readThisTurn": read, "evidenceIds": read_ids, "driverCalls": driver_calls,
+            "text": text, "readThisTurn": read, "evidenceIds": read_ids, "reasonerCalls": reasoner_calls,
             "commandAcked": bool(cmd and cmd["status"] == "acked" and inc["state"] == "refresh_pending"),
             "approvalPending": bool(ap and ap["status"] == "pending"),
             "evUnavailable": bool(read and not (src and src["available"] and disp and disp["available"])),
@@ -157,7 +157,7 @@ def _record_decision(inc, turn_id, step, d, override, snap, started):
         "incidentId": inc["_id"], "turnId": turn_id, "step": step, "route": d.route, "reason": d.reason,
         "classifierVersion": d.classifier_version, "probability": d.probability, "evidenceIds": snap["evidenceIds"],
         "gateOverride": override, "snapshot": {k: snap[k] for k in ("revision", "state", "intent", "readThisTurn",
-                                                                      "commandAcked", "driverCalls")},
+                                                                      "commandAcked", "reasonerCalls")},
         "at": now_ms(), "latencyMs": round((time.perf_counter() - started) * 1000, 3)})
 
 
@@ -207,14 +207,14 @@ def handle_turn(incident_id: str, turn_id: str, text: str) -> dict:
             db().turns.insert_one(dict(turn))
         except DuplicateKeyError:
             return {"error": "duplicate_in_flight"}
-        tool_order, route_trail, driver_calls = [], [], 0
+        tool_order, route_trail, reasoner_calls = [], [], 0
         src = disp = None
         read_ids: list = []
         response = None
         for step in range(policy.MAX_STEPS):
             started = time.perf_counter()
             inc = get_incident(incident_id)  # reload: revision may have changed
-            snap = _snapshot(inc, intent, read_ids, driver_calls, text, src, disp)
+            snap = _snapshot(inc, intent, read_ids, reasoner_calls, text, src, disp)
             d, override = policy.gate(_route(inc["classifierVersion"], snap), snap)
             _record_decision(inc, turn_id, step, d, override, snap, started)
             route_trail.append(d.route)
@@ -223,11 +223,11 @@ def handle_turn(incident_id: str, turn_id: str, text: str) -> dict:
                 src, disp = observe(inc)
                 read_ids = [src["_id"], disp["_id"]]
                 continue
-            if d.route == "DELEGATE_TO_DRIVER":
-                driver_calls += 1
-                tool_order.append("driver")
-                response = responses.render("driver_unavailable", inc["flightId"], None, None) \
-                    if driver.propose(inc, text) is None else None
+            if d.route == "DELEGATE_TO_REASONER":
+                reasoner_calls += 1
+                tool_order.append("reasoner")
+                response = responses.render("reasoner_unavailable", inc["flightId"], None, None) \
+                    if reasoner.propose(inc, text) is None else None
                 break
             if d.route == "RESPOND_NOW":
                 fresh = get_incident(incident_id)
@@ -238,7 +238,7 @@ def handle_turn(incident_id: str, turn_id: str, text: str) -> dict:
         if response is None:
             response = responses.render("budget", inc["flightId"], None, None)
         inc = get_incident(incident_id)
-        done = {"response": response, "routes": route_trail, "toolOrder": tool_order, "driverCalls": driver_calls,
+        done = {"response": response, "routes": route_trail, "toolOrder": tool_order, "reasonerCalls": reasoner_calls,
                 "state": inc["state"], "latencyMs": round((time.perf_counter() - t0) * 1000, 3),
                 "evidenceIds": read_ids, "completedAt": now_ms(), "status": "complete"}
         db().turns.update_one({"incidentId": incident_id, "turnId": turn_id}, {"$set": done})

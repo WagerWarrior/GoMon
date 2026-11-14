@@ -1,12 +1,12 @@
 """Bootstrap router (transparent rules, release 'bootstrap-v0'). NOT a trained model.
 
-It runs before every driver call and after every tool result. Output carries a reasonCode and evidence IDs.
+It runs before every reasoner call and after every tool result. Output carries a reasonCode and evidence IDs.
 `probability` is None on purpose: this release is uncalibrated; the trained, calibrated release is increment 3.
 """
 from dataclasses import dataclass, field
 
 VERSION = "bootstrap-v0"
-ROUTES = ("RESPOND_NOW", "READ_STATE", "REQUEST_APPROVAL", "VERIFY_EFFECT", "DELEGATE_TO_DRIVER")
+ROUTES = ("RESPOND_NOW", "READ_STATE", "REQUEST_APPROVAL", "VERIFY_EFFECT", "DELEGATE_TO_REASONER")
 
 _CLOSE = ("close", "resolved", "verify", "done", "can i")
 _STATUS = ("status", "what", "why", "mismatch", "stale", "show")
@@ -38,7 +38,7 @@ def classify(s: dict) -> Decision:
     intent = s["intent"]
     ev = s["evidenceIds"]
     if intent == "unknown":
-        return Decision("DELEGATE_TO_DRIVER", "unknown_intent", ev)
+        return Decision("DELEGATE_TO_REASONER", "unknown_intent", ev)
     if intent == "approve_attempt":
         return Decision("RESPOND_NOW", "approval_is_ui_only", ev)
     if not s["readThisTurn"]:

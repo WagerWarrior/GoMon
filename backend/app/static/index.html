@@ -55,13 +55,13 @@ const ev=[...V.observations.map(o=>[o.observedAt,`Read ${o.system}: ${o.availabl
 $('ev').innerHTML=ev.map(e=>`<li>${t(e[0])} ${e[1]}</li>`).join('')}
 async function start(mode){const r=await j('/api/incidents',{flightId:'HX101',applyMode:mode});iid=r._id;$('say').hidden=true;await load()}
 async function learning(){try{const L=await j('/api/learning'),r=L.latest;
-$('lrn').textContent=`Active release for new sessions: ${L.active}. Releases: `+(L.releases.map(x=>x._id+' ('+x.status+')').join(', ')||'none')+(r?`. Latest eval: ${r.release} on ${r.datasetRevision}, ${r.promoted?'PROMOTED':'REJECTED: '+r.rejectReasons.join('; ')}. ${r.driver}.`:'');
-if(r){const rows=Object.entries(r.systems).map(([k,v])=>`<tr><td>${k}</td><td>${(v.accuracy*100).toFixed(1)}%</td><td>${(v.driverCallRate*100).toFixed(0)}%</td><td>${v.unsafeEarlyRaw}/${v.unsafeDenominator}</td><td>${v.classifierOverheadMsPerBoundary} ms</td></tr>`);
-$('cmp').innerHTML='<tr style="text-align:left;color:var(--mute)"><th>System</th><th>Route accuracy</th><th>Driver-call rate</th><th>Unsafe early</th><th>Router overhead</th></tr>'+rows.join('')}}catch(e){$('lrn').textContent='No learning data yet. Run: uv run python -m app.learning.run'}}
+$('lrn').textContent=`Active release for new sessions: ${L.active}. Releases: `+(L.releases.map(x=>x._id+' ('+x.status+')').join(', ')||'none')+(r?`. Latest eval: ${r.release} on ${r.datasetRevision}, ${r.promoted?'PROMOTED':'REJECTED: '+r.rejectReasons.join('; ')}. ${r.reasoner}.`:'');
+if(r){const rows=Object.entries(r.systems).map(([k,v])=>`<tr><td>${k}</td><td>${(v.accuracy*100).toFixed(1)}%</td><td>${(v.reasonerCallRate*100).toFixed(0)}%</td><td>${v.unsafeEarlyRaw}/${v.unsafeDenominator}</td><td>${v.classifierOverheadMsPerBoundary} ms</td></tr>`);
+$('cmp').innerHTML='<tr style="text-align:left;color:var(--mute)"><th>System</th><th>Route accuracy</th><th>Reasoner-call rate</th><th>Unsafe early</th><th>Router overhead</th></tr>'+rows.join('')}}catch(e){$('lrn').textContent='No learning data yet. Run: uv run python -m app.learning.run'}}
 learning();
 $('new').onclick=()=>start('applies');$('newack').onclick=()=>start('ack_only');
 $('reconnect').onclick=async()=>{await j(`/api/incidents/${iid}/reconnect`,{});load()};
-const say=r=>{$('say').hidden=false;$('say').textContent=r.response+`   [${r.routes.join(' → ')} · driver calls: ${r.driverCalls} · ${r.latencyMs}ms]`};
+const say=r=>{$('say').hidden=false;$('say').textContent=r.response+`   [${r.routes.join(' → ')} · reasoner calls: ${r.reasonerCalls} · ${r.latencyMs}ms]`};
 async function ask(text){say(await j(`/api/incidents/${iid}/turns`,{text}));load()}
 $('ask').onclick=()=>ask($('q').value);$('verify').onclick=()=>ask('Verify the refresh');$('q').onkeydown=e=>{if(e.key==='Enter'&&!$('ask').disabled)ask($('q').value)};
 const dec=p=>async()=>{try{await j(`/api/incidents/${iid}/${p}`,{supervisor:'supervisor-demo',approvalId:V.incident.approval.approvalId})}catch(e){alert(e.message)}load()};

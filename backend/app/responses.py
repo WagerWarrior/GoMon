@@ -26,8 +26,8 @@ def render(kind: str, flight: str, src: dict | None, disp: dict | None, extra: d
                 "Closed on that fresh observation only.")
     if kind == "status":
         return f"Airline feed: {_fmt(src)}. Airport display: {_fmt(disp)}."
-    if kind == "driver_unavailable":
-        return ("That request needs the driver model, which isn't configured in this build. "
+    if kind == "reasoner_unavailable":
+        return ("That request needs the reasoner model, which isn't configured in this build. "
                 "Nothing was changed and the incident stays as it is.")
     if kind == "budget":
         return "I hit the per-turn step budget before reaching a supported answer. Nothing was changed."

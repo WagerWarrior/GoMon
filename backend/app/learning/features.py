@@ -7,7 +7,7 @@ SCHEMA = "feat-v1"
 HASH_DIM = 256
 STATES = ("investigating", "awaiting_approval", "refresh_pending", "resolved")
 FLAGS = ("readThisTurn", "commandAcked", "approvalPending", "evUnavailable", "evMismatch")
-ROUTES = ("RESPOND_NOW", "READ_STATE", "VERIFY_EFFECT", "DELEGATE_TO_DRIVER")  # REQUEST_APPROVAL: no labels yet
+ROUTES = ("RESPOND_NOW", "READ_STATE", "VERIFY_EFFECT", "DELEGATE_TO_REASONER")  # REQUEST_APPROVAL: no labels yet
 DIM = HASH_DIM + len(STATES) + len(FLAGS) + 2
 
 
@@ -32,6 +32,6 @@ def featurize(s: dict) -> np.ndarray:
     for i, f in enumerate(FLAGS):
         x[o + i] = 1.0 if s.get(f) else 0.0
     o += len(FLAGS)
-    x[o] = min(s.get("driverCalls", 0), 3) / 3.0
+    x[o] = min(s.get("reasonerCalls", 0), 3) / 3.0
     x[o + 1] = 1.0  # bias
     return x

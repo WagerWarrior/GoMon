@@ -10,7 +10,7 @@ MongoDB is the single source of truth. Every fact the demo shows is read back fr
 | `incidents` | state machine, revision, approval (bound to flight/action/source version), command, resolution |
 | `observations` | each read of source/display: status, `sourceTime`, `sourceVersion`, `observedAt` |
 | `commands` | intent (written before send), ACK (separate), outcome |
-| `turns` | committed turn, tool order, route trail, driver calls, latency; unique `(incidentId, turnId)` = dedup |
+| `turns` | committed turn, tool order, route trail, reasoner calls, latency; unique `(incidentId, turnId)` = dedup |
 | `decisions` | one row per classifier boundary: route, reason, classifier release, evidence IDs, gate override |
 | `sim_sources` `sim_displays` `sim_effects` | the labeled simulator; `sim_effects` is the effects ledger, unique per `commandId` |
 
@@ -18,9 +18,9 @@ Next (not built yet): `training_examples`, `classifier_releases`, `resolved_case
 
 ## Layout
 - `app/classifier.py` bootstrap router `bootstrap-v0` (rules, **not trained**, probability is `null`)
-- `app/policy.py` deterministic gates: step/driver budgets, closure rule (`can_close`)
+- `app/policy.py` deterministic gates: step/reasoner budgets, closure rule (`can_close`)
 - `app/engine.py` turn loop, approval/reject, command handling (server-enforced)
-- `app/driver.py` driver seam — **no model configured**; returns nothing, engine answers honestly
+- `app/reasoner.py` reasoner seam — **no model configured**; returns nothing, engine answers honestly
 - `app/simulator.py` fake airline feed + display; reconnect never replays; receiver dedups by `commandId`
 - `app/api.py` + `app/static/index.html` API and single-screen dashboard
 
@@ -39,12 +39,12 @@ Offline, versioned, gated. Nothing is learned live. Data is derived from SIMULAT
 `python -m app.learning.run` (from `backend/`): **generate** oracle-labeled boundary snapshots (`training_examples`,
 split by phrasing family) → **train** softmax classifier, fit/calibrate/threshold with leave-one-family-out CV on
 train+validation only (`classifier_releases`, immutable, sha256 digest) → **evaluate once** on a frozen test split vs
-always-driver and `bootstrap-v0` (`eval_reports`) → **promote** only if: zero unsafe early responses, no accuracy
+always-reasoner and `bootstrap-v0` (`eval_reports`) → **promote** only if: zero unsafe early responses, no accuracy
 regression vs bootstrap. A release is pinned per incident at open; a promotion affects new sessions only. The deterministic
 policy gate runs on every release, and a learned route may only answer with the read-only status template unless the text is
 an explicit close request.
 
-Labels: oracle from the spec's evidence table (`oracle.py`), never driver output. Test splits are single-use: after a
+Labels: oracle from the spec's evidence table (`oracle.py`), never reasoner output. Test splits are single-use: after a
 test set is evaluated it is renamed `burned_testN` and never trained or tuned on again; promote against a fresh one.
 
 ### Results so far (real runs; see `eval_reports` for the stored records)
@@ -53,9 +53,9 @@ Frozen test sets were consumed in this order. **No release has been promoted; th
 |---|---|---|
 | `linear-a4f99355` | F5/F6 (burned_test1) | rejected: 21/114 unsafe early responses |
 | `linear-ae92b92d` | F8/F9 (burned_test2) | rejected: 7/147 unsafe early; accuracy 0.761 < bootstrap 0.778 |
-| `linear-ff7e0528` | F11/F12 (current test) | rejected: 0/147 unsafe, but accuracy 0.704 < bootstrap 0.778 (abstains to driver more) |
+| `linear-ff7e0528` | F11/F12 (current test) | rejected: 0/147 unsafe, but accuracy 0.704 < bootstrap 0.778 (abstains to reasoner more) |
 
 On the last set `bootstrap-v0` itself had 7/147 unsafe early responses (keyword false positives), so it would not pass the
 safety gate either. Hash-n-gram linear models trained on ~870 templated examples do not beat keywords on new wording;
-the real lever is more reviewed real turns (collected in `turns`/`decisions`). Not measured: driver latency, end-to-end
-or voice latency (no driver/ElevenLabs configured). Classifier overhead only is reported.
+the real lever is more reviewed real turns (collected in `turns`/`decisions`). Not measured: reasoner latency, end-to-end
+or voice latency (no reasoner/ElevenLabs configured). Classifier overhead only is reported.

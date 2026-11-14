@@ -17,7 +17,7 @@ def test_reconnect_does_not_replay_and_answer_names_stale_display(hx101):
     assert "On time from 10:05" in t["response"] and "Delayed from 10:20" in t["response"]
     assert t["response"].startswith("Not yet")
     assert t["state"] == "awaiting_approval"
-    assert t["routes"] == ["READ_STATE", "RESPOND_NOW"] and t["driverCalls"] == 0
+    assert t["routes"] == ["READ_STATE", "RESPOND_NOW"] and t["reasonerCalls"] == 0
     assert db().commands.count_documents({}) == 0 and db().sim_effects.count_documents({}) == 0
 
 
@@ -101,11 +101,11 @@ def test_duplicate_turn_event_is_not_reprocessed(hx101):
     assert again["duplicate"] is True and db().decisions.count_documents({}) == n
 
 
-def test_unknown_request_goes_to_driver_honestly(hx101):
+def test_unknown_request_goes_to_reasoner_honestly(hx101):
     inc = engine.open_incident(hx101)
     t = ask(inc, "t1", "book me a taxi")
-    assert t["routes"] == ["DELEGATE_TO_DRIVER"] and t["driverCalls"] == 1
-    assert "driver model" in t["response"]
+    assert t["routes"] == ["DELEGATE_TO_REASONER"] and t["reasonerCalls"] == 1
+    assert "reasoner model" in t["response"]
 
 
 def test_every_decision_is_persisted_with_router_version(hx101):
