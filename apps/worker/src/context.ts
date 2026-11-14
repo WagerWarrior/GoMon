@@ -5,6 +5,7 @@
  */
 import type { Ctx } from "./governance.ts";
 import { readableProjects } from "./scope.ts";
+import { loadPlatform, platformFacts, platformSources } from "./platform.ts";
 
 export type WorkspaceSource = { id: string; line: string };
 export type Workspace = { header: string; sources: WorkspaceSource[] };
@@ -66,7 +67,8 @@ export function workspaceFor(ctx: Ctx, callId: string): Promise<Workspace> {
 async function loadWorkspace(ctx: Ctx, callId: string): Promise<Workspace> {
   // Previous calls and locks come from this project and company context (contract 1); counts likewise.
   const scope = { teamId: ctx.teamId, projectId: { $in: readableProjects(ctx.projectId) } };
-  const [call, previous, recentLocks, kinds, issues] = await Promise.all([
+  const [platform, call, previous, recentLocks, kinds, issues] = await Promise.all([
+    loadPlatform(ctx.c, ctx.teamId, callId),
     ctx.c.calls.findOne({ _id: callId as never }, { projection: { title: 1, startedAt: 1 } }),
     // Real conversations only (skip near-empty test calls); seeded past meetings carry a summary instead.
     ctx.c.calls.find({ ...scope, _id: { $ne: callId as never }, $or: [{ utteranceSeq: { $gte: 10 } }, { summary: { $type: "string" } }] }).sort({ startedAt: -1 }).limit(4).project({ title: 1, startedAt: 1, utteranceSeq: 1, summary: 1 }).toArray(),
@@ -99,7 +101,8 @@ async function loadWorkspace(ctx: Ctx, callId: string): Promise<Workspace> {
     line: `MongoDB Atlas database "gomon": active memories ${kinds.map((k) => `${k.n} ${k._id}`).join(", ") || "none"}.`,
   };
   return {
-    header: `This call: "${call?.title ?? "untitled"}", you joined about ${mins} minute${mins === 1 ? "" : "s"} ago. What was said since then is in CALL SO FAR, OPEN CALL ITEMS and RECENT TURNS. GitHub repo: ${env.githubRepo()}.`,
-    sources: [...locks, ...calls, ...issues, stats],
+    header: `${platformFacts(platform)}\nCALL SO FAR, OPEN CALL ITEMS and RECENT TURNS hold what was said since you joined. GitHub repo: ${env.githubRepo()}.`,
+    // Fixed facts first; then filed tickets, GitHub issues, the full memory index, past calls and recent locks.
+    sources: [...platformSources(platform), ...issues, ...calls, ...locks, stats],
   };
 }

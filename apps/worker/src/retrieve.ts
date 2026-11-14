@@ -60,10 +60,11 @@ export async function retrieve(c: Cols, scope: Scope, query: string, limit = 6):
     via: (details?.details ?? []).filter((d) => typeof d.rank === "number").map((d) => d.inputPipelineName),
   }));
 
-  // Explicit IDs ("R-12", "d 09") resolve exactly (keys are unique per team) and rank first.
+  // Explicit IDs ("R-12", "d 09", "D17") resolve exactly and rank first, from any of the team's projects: keys are unique per
+  // team, and live (Nov 14) "look at D15" in an Enterprise SSO call found nothing because D-15 is a Public API decision.
   const keys = [...new Set([...query.matchAll(/\b([a-z])[\s-]?(\d{1,3})\b/gi)].map((m) => `${m[1].toUpperCase()}-${m[2].padStart(2, "0")}`))];
   const exact = keys.length
-    ? await c.memories.find({ ...filter, key: { $in: keys } }, { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1, projectId: 1 } }).toArray()
+    ? await c.memories.find({ teamId: scope.teamId, status: "active", key: { $in: keys } }, { projection: { key: 1, kind: 1, text: 1, origin: 1, version: 1, projectId: 1 } }).toArray()
     : [];
   // Index-lag guard: include very recently promoted/corrected memories straight from the collection.
   const fresh = await c.memories

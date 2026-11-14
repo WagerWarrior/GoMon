@@ -41,7 +41,7 @@ export async function gate(ctx: Ctx, actor: string, action: string, callId?: str
   return result;
 }
 
-const PREFIX: Record<ItemKind, string> = {
+export const PREFIX: Record<ItemKind, string> = {
   decision: "D", requirement: "R", constraint: "C", risk: "K", open_question: "Q", action: "T", assumption: "A", interface: "I", alternative: "L",
 };
 
