@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "seed:dev": "tsx dev/seed.mts",
-    "sim": "tsx dev/sim.mts"
+    "sim": "tsx dev/sim.mts",
+    "embed": "tsx dev/embed.mts"
   },
   "dependencies": {
     "mongodb": "^7.0.0",

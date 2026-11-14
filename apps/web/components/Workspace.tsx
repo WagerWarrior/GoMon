@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AskPanel from "./AskPanel";
 import Diagram from "./Diagram";
 import { buildDiagram } from "@/lib/mermaid";
 import { stageStats } from "@/lib/stats";
@@ -119,6 +120,7 @@ export default function Workspace({ callId }: { callId: string }) {
           {data.conflicts.length === 0 ? <p className="muted">No conflicts with stored memory so far.</p> :
             <ul className="plain">{data.conflicts.map((c) => <li key={id(c)}><span className={`pill ${c.severity === "high" ? "bad" : "warn"}`}>{c.severity}</span> <b>{c.memoryKey ?? "memory"}</b> {c.note} {c.spoken ? <span className="muted">· Gomon said this aloud</span> : null}</li>)}</ul>}</section>
 
+        <AskPanel callId={callId} actor={actor} />
         <section className="card wide"><h2>Decision diagram <span className="muted small">generated from active memories</span></h2><Diagram source={diagram} /></section>
 
         <section className="card wide"><h2>Actions &amp; audit</h2>

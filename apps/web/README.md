@@ -43,3 +43,11 @@ validator that requires them for active decisions accepts it.
 
 ## Not built / not measured
 Presence and live cursors (stretch). No latency numbers are claimed: the Timings panel shows only what the worker logs.
+
+## Ask Gomon: memory on vs off (Atlas Vector Search)
+
+`npm run embed` creates the `memories_vector` index (vector + filters on status/teamId/projectId) and embeds
+active memories with Voyage (`voyage-4`, 1024 dims). `/api/ask` embeds anything new, then runs `$vectorSearch`
+(memory on) or skips retrieval (memory off); each ask is written to `audit_events` with the cited memory IDs.
+A correction drops the old vector, so the new text is re-embedded and the old meaning is never retrieved.
+Secrets come from the repo-root `.env` (git-ignored), loaded by `lib/db.ts`.

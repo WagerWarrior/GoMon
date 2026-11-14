@@ -37,3 +37,9 @@ h3{font-size:12px;margin:16px 0 6px;color:var(--label2);text-transform:uppercase
 .foot{text-align:center;color:var(--label2);font-size:11.5px;margin:18px 0}
 .empty-home{max-width:640px;margin:15vh auto;padding:20px}.empty-home pre{background:var(--fill);padding:10px 14px;border-radius:10px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* Ask Gomon (memory on/off proof) */
+.ask-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+.ask-side{border:1px solid var(--line,rgba(127,127,127,.2));border-radius:12px;padding:12px;min-width:0}
+.ask-side p{margin:6px 0 10px}
+.cite{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line,rgba(127,127,127,.15))}
+@media(max-width:700px){.ask-grid{grid-template-columns:1fr}}
