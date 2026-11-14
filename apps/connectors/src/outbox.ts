@@ -72,11 +72,14 @@ async function send(d: Db, a: Action, env: Env): Promise<Sent> {
   if (a.type === "post_slack") {
     const calls = d.collection("calls");
     const call: any = a.callId ? await calls.findOne({ _id: a.callId as any }) : null;
-    let thread: string | undefined = call?.slackThreadTs;
+    // A thread lives in one channel; if SLACK_CHANNEL_ID changed since the call's thread was started, start a new one here.
+    const here = (c: any) => !!c?.slackThreadTs && (!c.slackRootId || String(c.slackRootId).startsWith(`${env.SLACK_CHANNEL_ID}:`));
+    let thread: string | undefined = here(call) ? call.slackThreadTs : undefined;
     if ((a.attempts ?? 1) > 1) { const prior = await slack.findMessage(env, a.idempotencyKey, thread); if (prior) return { ...prior, note: "adopted earlier attempt" }; }
     if (!thread && a.callId) { // thread per call: the first post becomes the root
       const root = await slack.postMessage(env, `Gomon design call: ${call?.title ?? a.callId}`, `root:${a.callId}`);
-      const upd = await calls.findOneAndUpdate({ _id: a.callId as any, slackThreadTs: { $exists: false } }, { $set: { slackThreadTs: root.ts, slackRootId: root.externalId } }, { returnDocument: "after" });
+      const notHere = { $or: [{ slackThreadTs: { $exists: false } }, { slackRootId: { $not: new RegExp(`^${env.SLACK_CHANNEL_ID}:`) } }] };
+      const upd = await calls.findOneAndUpdate({ _id: a.callId as any, ...notHere }, { $set: { slackThreadTs: root.ts, slackRootId: root.externalId } }, { returnDocument: "after" });
       thread = (upd as any)?.slackThreadTs ?? (await calls.findOne({ _id: a.callId as any }) as any)?.slackThreadTs ?? root.ts;
     }
     const m = await slack.postMessage(env, String(a.payload.text ?? ""), a.idempotencyKey, thread);

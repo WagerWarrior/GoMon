@@ -159,3 +159,16 @@ test("Slack read-back that cannot see the message leaves the action 'sent', neve
     assert.equal((await get(d, id2)).status, "sent");
   } finally { await sl.close(); await done(); }
 });
+
+test("Slack channel changed: a thread from the old channel is not reused; a new root is started in the current channel", async () => {
+  const { d, done } = await freshDb(); const sl = await fakeSlack();
+  try {
+    await d.collection("calls").updateOne({ _id: "call-1" as any }, { $set: { slackThreadTs: "1600000000.000100", slackRootId: "COLD:1600000000.000100" } });
+    const id = await queue(d, "post_slack"); await processAction(d, id, envFor(undefined, sl.url));
+    const roots = sl.state.msgs.filter((m) => !m.thread_ts); const replies = sl.state.msgs.filter((m) => m.thread_ts);
+    assert.equal(roots.length, 1, "new root in C1"); assert.equal(replies.length, 1);
+    assert.equal(replies[0].thread_ts, roots[0].ts, "reply goes into the new thread, not the old channel's");
+    const call: any = await d.collection("calls").findOne({ _id: "call-1" as any });
+    assert.equal(call.slackRootId, `C1:${roots[0].ts}`); assert.equal(call.slackThreadTs, roots[0].ts);
+  } finally { await sl.close(); await done(); }
+});
