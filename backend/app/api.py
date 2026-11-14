@@ -1,5 +1,6 @@
 """HTTP API + single-screen dashboard. Run: uvicorn app.api:app --port 8000 (from backend/)."""
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -19,6 +20,8 @@ def _startup():
 
 
 def _clean(doc):
+    if isinstance(doc, datetime):
+        return doc.isoformat()
     if isinstance(doc, dict):
         return {k: _clean(v) for k, v in doc.items()}
     if isinstance(doc, list):
@@ -68,9 +71,10 @@ def view(iid: str):
         "decisions": list(d.decisions.find({"incidentId": iid}, {"_id": 0}).sort("at", 1)),
         "turns": list(d.turns.find({"incidentId": iid}, {"_id": 0}).sort("startedAt", 1)),
         "commands": list(d.commands.find({"incidentId": iid}, {"_id": 0})),
+        "audit": list(d.audit_events.find({"incidentId": iid}, {"_id": 0}).sort("at", 1)),
         "effects": list(d.sim_effects.find({"flightId": inc["flightId"]}, {"_id": 0})),
-        "simulator": {"source": d.sim_sources.find_one({"_id": inc["flightId"]}),
-                      "display": d.sim_displays.find_one({"_id": inc["flightId"]})}})
+        "simulator": {"source": d.sim_feed.find_one({"_id": inc["flightId"]}),
+                      "display": d.sim_display.find_one({"_id": inc["flightId"]})}})
 
 
 @app.post("/api/incidents/{iid}/turns")
@@ -95,6 +99,20 @@ def reject(iid: str, body: Decision):
         return _clean(engine.reject(iid, body.supervisor, body.approvalId))
     except PermissionError as e:
         raise HTTPException(409, str(e))
+
+
+class Tamper(BaseModel):
+    kind: str
+
+
+@app.post("/api/incidents/{iid}/tamper")
+def tamper(iid: str, body: Tamper):
+    if body.kind not in engine.TAMPERS:
+        raise HTTPException(400, "unknown tamper kind")
+    try:
+        return _clean(engine.tamper(iid, body.kind))
+    except KeyError:
+        raise HTTPException(404, "unknown incident")
 
 
 @app.get("/api/learning")

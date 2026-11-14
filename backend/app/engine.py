@@ -4,9 +4,10 @@ or the step budget. MongoDB holds every fact; the engine keeps no state of its o
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from . import classifier, reasoner, policy, responses, simulator
 from .db import db, now_ms
@@ -41,11 +42,37 @@ def _lock(incident_id: str) -> threading.Lock:
 
 # ---------- incidents ----------
 
+def _dt(ms: int) -> datetime:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
+def _target(src: dict) -> dict:
+    return {"flightId": src["flightId"], "status": src["status"], "sourceVersion": src["sourceVersion"],
+            "sourceTime": src["sourceTime"]}
+
+
+def _failed_clause(e: OperationFailure) -> str | None:
+    """Which clause of the validator MongoDB says failed (from errInfo), for the audit trail and the demo."""
+    try:
+        clauses = e.details["errInfo"]["details"]["clausesNotSatisfied"]
+        return {0: "schema: state/target shape", 1: "rule 1: approval for current version",
+                2: "rule 2: matching read after the command"}.get(clauses[0]["index"], str(clauses[0]["index"]))
+    except Exception:
+        return None
+
+
+def audit(incident_id: str, kind: str, **detail) -> None:
+    """Append-only record of each state change and each write MongoDB refused (not transactional on standalone)."""
+    db().audit_events.insert_one({"incidentId": incident_id, "kind": kind, "at": now_ms(), **detail})
+
+
 def open_incident(flight_id: str) -> dict:
+    src = simulator.read_source(flight_id)
     inc = {"_id": f"INC-{uuid.uuid4().hex[:8]}", "flightId": flight_id, "state": "investigating", "revision": 0,
-           "approval": None, "command": None, "resolution": None, "commandSeq": 0, "createdAt": now_ms(),
+           "target": _target(src), "approval": None, "command": None, "resolution": None, "commandSeq": 0, "createdAt": now_ms(),
            "classifierVersion": active_version(), "label": simulator.LABEL}
     db().incidents.insert_one(inc)
+    audit(inc["_id"], "opened", state="investigating")
     return inc
 
 
@@ -58,11 +85,17 @@ def get_incident(incident_id: str) -> dict:
 
 def _update(inc: dict, expected_rev: int, fields: dict) -> dict:
     """Optimistic update: only applies if the incident revision is unchanged."""
-    r = db().incidents.find_one_and_update({"_id": inc["_id"], "revision": expected_rev},
-                                           {"$set": fields, "$inc": {"revision": 1}},
-                                           return_document=ReturnDocument.AFTER)
+    try:
+        r = db().incidents.find_one_and_update({"_id": inc["_id"], "revision": expected_rev},
+                                               {"$set": fields, "$inc": {"revision": 1}},
+                                               return_document=ReturnDocument.AFTER)
+    except OperationFailure as e:  # code 121: MongoDB's validator refused the write
+        audit(inc["_id"], "rejected_by_mongodb", attempted=fields.get("state"), code=e.code,
+              rule=_failed_clause(e), error=str(e.details.get("errmsg", e)) if e.details else str(e))
+        raise
     if r is None:
         raise RuntimeError("revision_conflict")
+    audit(inc["_id"], "state_change", state=r["state"], revision=r["revision"])
     return r
 
 
@@ -71,6 +104,10 @@ def _update(inc: dict, expected_rev: int, fields: dict) -> dict:
 def observe(inc: dict) -> tuple[dict, dict]:
     """Read both systems and persist both observations (separate records, with source time != observed time)."""
     fid = inc["flightId"]
+    sent = (inc.get("command") or {}).get("sentAt")
+    if sent is not None:  # a verifying read must be strictly after the command (validator rule 2)
+        while now_ms() <= int(sent.timestamp() * 1000):
+            time.sleep(0.001)
     out = []
     for system, row in (("source", simulator.read_source(fid)), ("display", simulator.read_display(fid))):
         o = {"incidentId": inc["_id"], "system": system, "flightId": fid, "observedAt": now_ms(),
@@ -106,8 +143,8 @@ def _request_approval(inc: dict, src: dict) -> dict:
         return inc
     approval = {"approvalId": uuid.uuid4().hex[:10], "status": "pending", "flightId": inc["flightId"],
                 "action": "refresh_display", "sourceVersion": src["sourceVersion"], "requestedAt": now_ms(),
-                "expiresAt": now_ms() + policy.APPROVAL_TTL_MS, "supervisor": None}
-    return _update(inc, inc["revision"], {"state": "awaiting_approval", "approval": approval})
+                "expiresAt": now_ms() + policy.APPROVAL_TTL_MS, "supervisorId": None}
+    return _update(inc, inc["revision"], {"state": "awaiting_approval", "approval": approval, "target": _target(src)})
 
 
 def approve(incident_id: str, supervisor: str, approval_id: str) -> dict:
@@ -125,9 +162,9 @@ def approve(incident_id: str, supervisor: str, approval_id: str) -> dict:
         seq = inc["commandSeq"] + 1
         command = {"commandId": f"{inc['_id']}:refresh:{seq}", "incidentId": inc["_id"], "flightId": inc["flightId"],
                    "action": "refresh_display", "sourceVersion": ap["sourceVersion"], "approvalId": approval_id,
-                   "status": "intent", "intentAt": now_ms(), "ackAt": None, "label": simulator.LABEL}
+                   "status": "intent", "intentAt": now_ms(), "sentAt": _dt(now_ms()), "ackAt": None, "label": simulator.LABEL}
         db().commands.insert_one(dict(command))  # intent persisted before sending
-        ap = {**ap, "status": "approved", "supervisor": supervisor, "approvedAt": now_ms()}
+        ap = {**ap, "status": "approved", "supervisorId": supervisor, "approvedAt": now_ms()}
         inc = _update(inc, inc["revision"], {"state": "refresh_pending", "approval": ap, "commandSeq": seq,
                                              "command": command})
         ack = simulator.send_refresh(command["commandId"], inc["flightId"])
@@ -146,7 +183,7 @@ def reject(incident_id: str, supervisor: str, approval_id: str) -> dict:
         ap = inc.get("approval")
         if inc["state"] != "awaiting_approval" or not ap or ap["approvalId"] != approval_id:
             raise PermissionError("no_matching_pending_approval")
-        ap = {**ap, "status": "rejected", "supervisor": supervisor, "decidedAt": now_ms()}
+        ap = {**ap, "status": "rejected", "supervisorId": supervisor, "decidedAt": now_ms()}
         return _update(inc, inc["revision"], {"state": "investigating", "approval": ap})  # no write
 
 
@@ -177,10 +214,19 @@ def _respond(inc: dict, intent: str, reason: str, src, disp) -> tuple[str, dict]
         return responses.render("status", fid, src, disp), inc
     if ok:
         had_cmd = inc["state"] == "refresh_pending"
-        resolution = {"verifiedAt": now_ms(), "sourceVersion": src["sourceVersion"], "evidenceIds":
-                      [src["_id"], disp["_id"]], "commandId": inc["command"]["commandId"] if had_cmd else None}
-        inc = _update(inc, inc["revision"], {"state": "resolved", "resolution": resolution})
-        return responses.render("closed_verified" if had_cmd else "consistent", fid, src, disp), inc
+        if not had_cmd:  # validator rule 2 requires a command; with none sent there is nothing to close here
+            return responses.render("consistent", fid, src, disp), inc
+        verification = {"observationId": disp["_id"], "sourceObservationId": src["_id"], "flightId": disp["flightId"],
+                        "displayStatus": disp["status"], "displayVersion": disp["sourceVersion"],
+                        "displaySourceTime": disp["sourceTime"], "observedAt": _dt(disp["observedAt"])}
+        resolution = {"verifiedAt": now_ms(), "sourceVersion": src["sourceVersion"],
+                      "evidenceIds": [src["_id"], disp["_id"]], "commandId": inc["command"]["commandId"]}
+        try:
+            inc = _update(inc, inc["revision"], {"state": "resolved", "verification": verification,
+                                                 "resolution": resolution})
+        except OperationFailure:
+            return responses.render("rejected_by_mongodb", fid, src, disp), inc
+        return responses.render("closed_verified", fid, src, disp), inc
     if why == "mismatch":
         after = inc["state"] == "refresh_pending"
         if after:  # ACK without application: command effect is not recovery
@@ -243,3 +289,49 @@ def handle_turn(incident_id: str, turn_id: str, text: str) -> dict:
                 "evidenceIds": read_ids, "completedAt": now_ms(), "status": "complete"}
         db().turns.update_one({"incidentId": incident_id, "turnId": turn_id}, {"$set": done})
         return {**turn, **done, "duplicate": False}
+
+
+# ---------- red team: forbidden writes that bypass the engine (demo + tests) ----------
+
+TAMPERS = {
+    "refresh_without_approval": "Skip the supervisor: set the incident to refresh_pending with no approval",
+    "close_without_evidence": "Claim it is fixed: set the incident to resolved with no verification",
+    "close_on_ack_only": "Treat the acknowledgment as recovery: resolve using what the display actually shows",
+    "duplicate_effect": "Resend a command: insert a second applied effect for the same commandId",
+}
+
+
+def tamper(incident_id: str, kind: str) -> dict:
+    """Attempt a write the rules forbid, directly against MongoDB. Returns what MongoDB said.
+    Only forbidden payloads are used; a real engine path is never touched, so a refusal leaves the incident as is."""
+    inc = get_incident(incident_id)
+    d = db()
+    out = {"kind": kind, "attempt": TAMPERS[kind]}
+    try:
+        if kind == "refresh_without_approval":
+            d.incidents.update_one({"_id": incident_id}, {"$set": {
+                "state": "refresh_pending", "approval": {"sourceVersion": inc["target"]["sourceVersion"]}}})  # no supervisor
+        elif kind == "close_without_evidence":
+            d.incidents.update_one({"_id": incident_id}, {"$set": {"state": "resolved"}})
+        elif kind == "close_on_ack_only":
+            disp = d.sim_display.find_one({"_id": inc["flightId"]})
+            sent = ((inc.get("command") or {}).get("sentAt")) or _dt(now_ms() - 5000)
+            d.incidents.update_one({"_id": incident_id}, {"$set": {
+                "state": "resolved", "command.sentAt": sent,
+                "verification": {"observationId": "tamper", "flightId": disp["flightId"], "displayStatus": disp["status"],
+                                 "displayVersion": disp["sourceVersion"], "displaySourceTime": disp["sourceTime"],
+                                 "observedAt": _dt(now_ms())}}})
+        elif kind == "duplicate_effect":
+            eff = d.sim_effects.find_one({"flightId": inc["flightId"]})
+            if not eff:
+                return {**out, "refused": False, "note": "No command has been applied yet, so there is nothing to duplicate."}
+            d.sim_effects.insert_one({"commandId": eff["commandId"], "flightId": inc["flightId"], "applied": True,
+                                      "at": now_ms(), "label": simulator.LABEL})
+    except (OperationFailure, DuplicateKeyError) as e:
+        info = (e.details or {}).get("errInfo") if hasattr(e, "details") else None
+        rule = "rule 3: unique index on commandId" if isinstance(e, DuplicateKeyError) else _failed_clause(e)
+        audit(incident_id, "tamper_rejected_by_mongodb", attempt=kind, rule=rule)
+        return {**out, "refused": True, "code": getattr(e, "code", None), "rule": rule,
+                "error": str((e.details or {}).get("errmsg", e)) if getattr(e, "details", None) else str(e)}
+    audit(incident_id, "tamper_ACCEPTED", attempt=kind)  # would indicate a hole in the rules
+    return {**out, "refused": False, "note": "MongoDB accepted this write."}

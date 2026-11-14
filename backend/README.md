@@ -12,7 +12,7 @@ MongoDB is the single source of truth. Every fact the demo shows is read back fr
 | `commands` | intent (written before send), ACK (separate), outcome |
 | `turns` | committed turn, tool order, route trail, reasoner calls, latency; unique `(incidentId, turnId)` = dedup |
 | `decisions` | one row per classifier boundary: route, reason, classifier release, evidence IDs, gate override |
-| `sim_sources` `sim_displays` `sim_effects` | the labeled simulator; `sim_effects` is the effects ledger, unique per `commandId` |
+| `sim_feed` `sim_display` `sim_effects` | the labeled simulator; `sim_effects` is the effects ledger, unique per `commandId` |
 
 Next (not built yet): `training_examples`, `classifier_releases`, `resolved_cases` (+ Vector Search), checkpoints.
 

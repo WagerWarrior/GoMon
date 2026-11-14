@@ -39,7 +39,7 @@ def test_full_recovery_verified_close(hx101):
     ap = engine.get_incident(inc["_id"])["approval"]
     after = engine.approve(inc["_id"], "supervisor-1", ap["approvalId"])
     assert after["state"] == "refresh_pending" and after["command"]["status"] == "acked"
-    assert after["approval"]["supervisor"] == "supervisor-1"
+    assert after["approval"]["supervisorId"] == "supervisor-1"
     t = ask(inc, "t2", "verify the refresh")
     assert t["routes"] == ["VERIFY_EFFECT", "RESPOND_NOW"]
     assert t["state"] == "resolved" and "closed" in t["response"]

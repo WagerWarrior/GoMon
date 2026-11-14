@@ -22,8 +22,11 @@ def render(kind: str, flight: str, src: dict | None, disp: dict | None, extra: d
         return (f"Yes. After the refresh, a fresh read shows {flight} matches on both systems: {_fmt(disp)}. "
                 "The incident is closed. This holds for that observation only.")
     if kind == "consistent":
-        return (f"The display and airline feed agree for {flight}: {_fmt(disp)}. "
-                "Closed on that fresh observation only.")
+        return (f"The display and airline feed agree for {flight}: {_fmt(disp)}. No refresh was sent, and "
+                "MongoDB only accepts a closure backed by a verified refresh, so the incident stays open.")
+    if kind == "rejected_by_mongodb":
+        return ("MongoDB refused to record the closure because the stored evidence did not satisfy its rules. "
+                "The incident stays open.")
     if kind == "status":
         return f"Airline feed: {_fmt(src)}. Airport display: {_fmt(disp)}."
     if kind == "reasoner_unavailable":

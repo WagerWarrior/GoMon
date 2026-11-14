@@ -2,7 +2,7 @@
 
 Collections (see spec.md section 4):
   incidents, observations, commands, turns, decisions   -> operational state
-  sim_sources, sim_displays, sim_effects                -> SIMULATOR (labeled fake airline/airport systems)
+  sim_feed, sim_display, sim_effects                -> SIMULATOR (labeled fake airline/airport systems)
 """
 import os
 import time
@@ -30,7 +30,10 @@ def now_ms() -> int:
 
 
 def ensure_indexes() -> None:
+    from . import schema
     d = db()
+    schema.apply(d)  # MongoDB-enforced incident rules (validator)
+    d.audit_events.create_index([("incidentId", ASCENDING), ("at", ASCENDING)])
     d.turns.create_index([("incidentId", ASCENDING), ("turnId", ASCENDING)], unique=True)
     d.commands.create_index("commandId", unique=True)
     d.sim_effects.create_index("commandId", unique=True)  # receiver-side dedup
