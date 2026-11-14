@@ -30,10 +30,21 @@ const audit = (d: Db, a: Action, type: string, reason: string, ref: Record<strin
 
 export type Outcome = "sent" | "denied" | "failed" | "requeued" | "skipped";
 
+/** Action types this worker can actually send with its env. */
+export function configuredTypes(env: Env): Action["type"][] {
+  const t: Action["type"][] = [];
+  if (env.GITHUB_TOKEN && env.GITHUB_REPO) t.push("create_issue");
+  if (env.SLACK_BOT_TOKEN && env.SLACK_CHANNEL_ID) t.push("post_slack");
+  return t;
+}
+
 export async function processAction(d: Db, id: any, env: Env): Promise<Outcome> {
   const col = d.collection<Action>("actions");
+  // Several workers may share one database; a worker only claims the action types it is configured to send,
+  // so one missing a token never fails an action that another worker could deliver.
+  const types = configuredTypes(env);
   // Atomic claim: two workers (or a replayed change event) can never both send.
-  const a = await col.findOneAndUpdate({ _id: id, status: "queued" }, { $set: { status: "sending", updatedAt: new Date() }, $inc: { attempts: 1 } }, { returnDocument: "after" });
+  const a = await col.findOneAndUpdate({ _id: id, status: "queued", type: { $in: types } }, { $set: { status: "sending", updatedAt: new Date() }, $inc: { attempts: 1 } }, { returnDocument: "after" });
   if (!a) return "skipped";
 
   const policy = await checkPolicy(d, a.teamId, a.projectId, a.requestedBy, POLICY_FOR[a.type] ?? a.type);

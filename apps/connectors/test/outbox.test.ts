@@ -71,10 +71,23 @@ test("permanent errors stop (401) and missing config fails clearly; rate limit b
     assert.equal(await processAction(d, a2, envFor(gh.url)), "requeued");
     const x = await get(d, a2); assert.equal(x.status, "queued"); assert.ok(x.nextAttemptAt.getTime() - Date.now() > 500);
     assert.equal((await dueActionIds(d)).map(String).includes(String(a2)), false, "not due until backoff elapses");
+    // Missing config: this worker cannot send it, so it leaves the action queued for a worker that can (never fails it).
     const a3 = await queue(d, "create_issue");
-    assert.equal(await processAction(d, a3, { GITHUB_API_URL: gh.url }), "failed");
-    assert.match((await get(d, a3)).error, /GITHUB_TOKEN is not set/);
+    assert.equal(await processAction(d, a3, { GITHUB_API_URL: gh.url }), "skipped");
+    const y = await get(d, a3); assert.equal(y.status, "queued"); assert.equal(y.attempts, 0);
   } finally { await gh.close(); await done(); }
+});
+
+test("two workers, only one configured for GitHub: the unconfigured one never claims the issue; the configured one sends it", async () => {
+  const { d, done } = await freshDb(); const gh = await fakeGithub(); const sl = await fakeSlack();
+  try {
+    const slackOnly = { SLACK_BOT_TOKEN: "t", SLACK_CHANNEL_ID: "C1", SLACK_API_URL: sl.url };
+    const issue = await queue(d, "create_issue"); const post = await queue(d, "post_slack");
+    assert.equal(await processAction(d, issue, slackOnly), "skipped");
+    assert.equal(await processAction(d, post, slackOnly), "sent");
+    assert.equal(await processAction(d, issue, envFor(gh.url, sl.url)), "sent");
+    assert.equal(gh.state.issues.length, 1);
+  } finally { await gh.close(); await sl.close(); await done(); }
 });
 
 test("an unknown assignee does not lose the issue: it is created unassigned and the note says so", async () => {
