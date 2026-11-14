@@ -4,38 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gomon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500&family=Geist+Mono:wght@400&display=swap">
 <style>
-  :root { --bg:#0b1220; --fg:#e8eefc; --muted:#8aa0c8; --accent:#00ed64; --warn:#ffb020; }
+  /* Gomon theme (design/gomon): white and leaf green, soft aura. Recall renders this page as the bot's camera (16:9). */
+  :root { --bg:#fbfdfc; --fg:#0b1510; --muted:#64706a; --faint:#9aa59f; --leaf:#1f9d55; --leafbg:rgba(31,157,85,.12); --warn:#a86300; }
   * { box-sizing: border-box; }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
-    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  /* Recall renders this page as the bot's camera (16:9). */
+  html, body { margin:0; height:100%; color:var(--fg); font: 16px/1.4 "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: radial-gradient(70vmax 50vmax at 50% -10%, rgba(31,157,85,.18), transparent 70%),
+                radial-gradient(50vmax 40vmax at 100% 100%, rgba(125,220,170,.14), transparent 70%), var(--bg); }
   main { height:100%; display:grid; place-items:center; padding:5vh 6vw; }
-  .card { width:100%; max-width:1100px; text-align:center; }
-  .orb { width:22vmin; height:22vmin; margin:0 auto 4vmin; border-radius:50%;
-    background: radial-gradient(circle at 35% 35%, #6dffa8, var(--accent) 45%, #007a33);
-    box-shadow: 0 0 0 0 rgba(0,237,100,.5); transition: transform .2s; }
-  body.speaking .orb { animation: pulse 1s infinite; transform: scale(1.06); }
-  body.offline .orb { filter: grayscale(1) brightness(.6); }
-  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(0,237,100,.55)} 100%{box-shadow:0 0 0 6vmin rgba(0,237,100,0)} }
-  h1 { margin:0; font-size:7vmin; letter-spacing:.02em; }
-  #status { color:var(--muted); font-size:3.2vmin; margin-top:1vmin; }
-  #line { margin-top:3vmin; font-size:3.6vmin; min-height:2.8em; }
-  #unlock { display:none; margin-top:3vmin; font-size:2.6vmin; padding:1.2vmin 3vmin; border-radius:999px;
-    border:0; background:var(--warn); color:#111; cursor:pointer; }
+  .card { width:auto; max-width:1100px; display:grid; grid-template-columns: auto minmax(0,1fr); align-items:center; gap:6vmin; }
+  .stage { position:relative; width:42vmin; aspect-ratio:1; }
+  #face { position:absolute; inset:0; }
+  .ring { position:absolute; inset:-4%; width:108%; height:108%; transform:rotate(-90deg); opacity:0; transition:opacity .3s; }
+  .ring circle { fill:none; stroke-width:.7; }
+  .ring .track { stroke: rgba(11,21,16,.08); } .ring .arc { stroke: var(--leaf); stroke-linecap:round; stroke-dasharray:295; }
+  body.locking .ring { opacity:1; } body.locking .ring .arc { animation: drain 10s linear forwards; }
+  @keyframes drain { from { stroke-dashoffset:0 } to { stroke-dashoffset:295 } }
+  .wave { position:absolute; left:50%; bottom:-3%; transform:translateX(-50%); display:flex; gap:.8vmin; height:3.2vmin; align-items:center; opacity:0; transition:opacity .3s; }
+  .wave i { width:.6vmin; border-radius:1vmin; background:var(--leaf); height:30%; animation: wv .9s ease-in-out infinite; }
+  .wave i:nth-child(2){animation-delay:.12s} .wave i:nth-child(3){animation-delay:.24s} .wave i:nth-child(4){animation-delay:.36s} .wave i:nth-child(5){animation-delay:.48s}
+  @keyframes wv { 0%,100% { height:25% } 50% { height:100% } }
+  body.speaking .wave { opacity:1; }
+  .eyebrow { font: 400 1.7vmin "Geist Mono", ui-monospace, monospace; letter-spacing:.2em; text-transform:uppercase; color:var(--faint); }
+  h1 { margin:.6vmin 0 0; font-size:9vmin; font-weight:300; letter-spacing:-.05em; line-height:1; }
+  #status { display:flex; align-items:center; gap:1.4vmin; color:var(--muted); font-size:3vmin; margin-top:2.4vmin; }
+  #status::before { content:""; width:1.2vmin; height:1.2vmin; border-radius:50%; background:var(--leaf); box-shadow:0 0 0 .9vmin var(--leafbg); }
+  body.offline #status::before { background:#a9b8af; box-shadow:none; }
+  #line { margin-top:3vmin; font-size:3.6vmin; letter-spacing:-.02em; min-height:2.8em; text-wrap:balance; }
+  #unlock { display:none; margin-top:3vmin; font: 500 2.4vmin "Geist", system-ui, sans-serif; padding:1.2vmin 3vmin; border-radius:999px;
+    border:0; background:var(--fg); color:#fff; cursor:pointer; }
   body.locked #unlock { display:inline-block; }
+  @media (prefers-reduced-motion: reduce) { .wave i, body.locking .ring .arc { animation:none } }
 </style>
 </head>
 <body class="offline">
 <main><div class="card">
-  <div class="orb" aria-hidden="true"></div>
-  <h1>Gomon</h1>
-  <div id="status">connecting…</div>
-  <div id="line"></div>
-  <button id="unlock">Click to enable Gomon's voice</button>
+  <div class="stage">
+    <svg class="ring" viewBox="0 0 100 100" aria-hidden="true"><circle class="track" cx="50" cy="50" r="47"></circle><circle class="arc" cx="50" cy="50" r="47"></circle></svg>
+    <div id="face"></div>
+    <div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
+  <div>
+    <span class="eyebrow">Design call memory</span>
+    <h1>Gomon</h1>
+    <div id="status">connecting…</div>
+    <div id="line"></div>
+    <button id="unlock">Click to enable Gomon's voice</button>
+  </div>
 </div></main>
+<script src="/gomon-avatar.js"></script>
 <script>
 (() => {
+  // Gomon's face follows the page state: offline (muted), listening, speaking, and the lock ring when it announces a lock.
+  const face = window.GomonFace ? window.GomonFace.mount(document.getElementById("face"), "vetoed") : { set() {} };
+  function setFace(k) { face.set(k); document.body.classList.toggle("locking", k === "locking"); }
   const $status = document.getElementById("status");
   const $line = document.getElementById("line");
   const $unlock = document.getElementById("unlock");
@@ -57,6 +81,7 @@
     $line.textContent = `“${item.text}”`;
     audio.addEventListener("playing", () => {
       document.body.classList.add("speaking");
+      setFace(/\block/i.test(item.text) ? "locking" : "speaking");
       setStatus("speaking");
       ack(item.sayId, "started", { pageLatencyMs: Math.round(performance.now() - t0) });
     }, { once: true });
@@ -64,6 +89,7 @@
       if (!current || current.item !== item) return;
       document.body.classList.remove("speaking");
       current = null;
+      setFace("listening");
       setStatus("listening");
       ack(item.sayId, state);
       playNext();
@@ -86,8 +112,8 @@
   });
 
   const es = new EventSource("/say/stream" + location.search) // ?callId= scopes this page to one call;
-  es.onopen = () => { document.body.classList.remove("offline"); setStatus("listening"); };
-  es.onerror = () => { document.body.classList.add("offline"); setStatus("reconnecting…"); };
+  es.onopen = () => { document.body.classList.remove("offline"); setFace("listening"); setStatus("listening"); };
+  es.onerror = () => { document.body.classList.add("offline"); setFace("vetoed"); setStatus("reconnecting…"); };
   es.addEventListener("say", (ev) => {
     const item = JSON.parse(ev.data);
     // A high-priority line (someone addressed Gomon) cancels anything not yet spoken.

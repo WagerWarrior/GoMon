@@ -86,3 +86,7 @@ Gomon is addressed. It is a development tool, not the agent, and must not be use
 - The worker bridge is covered by tests against a fake worker; it has not yet run against the real worker.
 - Scribe fallback (mic plus ElevenLabs Scribe) is not built.
 - The public URL was a temporary tunnel; a stable address is needed for the demo.
+
+## Gomon's face (Max, design)
+
+The page shows Gomon's live leaf avatar (`public/gomon-avatar.js`, served at `/gomon-avatar.js`). It is built by `design/gomon/build.mjs` from `apps/web/lib/gomon`, so the bot page and the workspace share one set of states. The face goes muted while offline, listens by default, speaks with voice bars, and shows the 10 s ring when the spoken line announces a lock. Rebuild after changing the states: `cd design/gomon && npm i && npm run build`.

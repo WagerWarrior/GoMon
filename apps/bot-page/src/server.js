@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { toUtterance, segmentBounds, verifyRecallSignature, PARTIAL_EVENT } from "./recall.js";
 
 const PAGE = new URL("../public/index.html", import.meta.url);
+const FACE = new URL("../public/gomon-avatar.js", import.meta.url); // Gomon's live face, built by design/gomon
 
 export function configFromEnv(env = process.env) {
   return {
@@ -240,6 +241,9 @@ export function createServer(cfg = configFromEnv()) {
 
     if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
       return send(res, 200, await readFile(PAGE, "utf8"), { "content-type": "text/html; charset=utf-8" });
+    }
+    if (req.method === "GET" && pathname === "/gomon-avatar.js") {
+      return send(res, 200, await readFile(FACE, "utf8"), { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
     }
     if (req.method === "GET" && pathname === "/health") {
       return send(res, 200, {

@@ -280,3 +280,14 @@ test("/health reports webhook auth mode and stats", async () => {
   assert.ok(h.stats.rejected >= 2);
   assert.ok(h.stats.duplicates >= 2);
 });
+
+test("the page loads Gomon's live face: /gomon-avatar.js is served as JavaScript", async () => {
+  const page = await (await fetch(`${base}/`)).text();
+  assert.match(page, /<script src="\/gomon-avatar\.js"><\/script>/);
+  const r = await fetch(`${base}/gomon-avatar.js`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type"), /javascript/);
+  const js = await r.text();
+  assert.match(js, /GomonFace/);
+  assert.match(js, /"listening"|listening:/);
+});
