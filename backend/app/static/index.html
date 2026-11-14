@@ -32,6 +32,8 @@ code{font-size:12px;color:var(--mute)}.stale{color:var(--bad)}
 <div class="say" id="say" hidden></div></section>
 <section class="card"><h2>Decision receipts (MongoDB: decisions)</h2><ul class="tl" id="dec"></ul></section>
 <section class="card"><h2>Evidence timeline (MongoDB: observations, commands)</h2><ul class="tl" id="ev"></ul></section>
+<section class="card span"><h2>Classifier releases &amp; evals (MongoDB: classifier_releases, eval_reports)</h2>
+<div class="meta" id="lrn">Loading…</div><div style="overflow-x:auto"><table id="cmp" style="border-collapse:collapse;width:100%;margin-top:8px;font-size:12.5px"></table></div></section>
 </main>
 <script>
 let iid=null,V=null;const $=i=>document.getElementById(i);
@@ -52,6 +54,11 @@ const ev=[...V.observations.map(o=>[o.observedAt,`Read ${o.system}: ${o.availabl
 ...V.commands.map(c=>[c.intentAt,`Command intent ${c.commandId} (${c.status})`]),...V.effects.map(e=>[e.at,`Simulator applied effect: ${e.applied}`])].sort((a,b)=>b[0]-a[0]);
 $('ev').innerHTML=ev.map(e=>`<li>${t(e[0])} ${e[1]}</li>`).join('')}
 async function start(mode){const r=await j('/api/incidents',{flightId:'HX101',applyMode:mode});iid=r._id;$('say').hidden=true;await load()}
+async function learning(){try{const L=await j('/api/learning'),r=L.latest;
+$('lrn').textContent=`Active release for new sessions: ${L.active}. Releases: `+(L.releases.map(x=>x._id+' ('+x.status+')').join(', ')||'none')+(r?`. Latest eval: ${r.release} on ${r.datasetRevision}, ${r.promoted?'PROMOTED':'REJECTED: '+r.rejectReasons.join('; ')}. ${r.driver}.`:'');
+if(r){const rows=Object.entries(r.systems).map(([k,v])=>`<tr><td>${k}</td><td>${(v.accuracy*100).toFixed(1)}%</td><td>${(v.driverCallRate*100).toFixed(0)}%</td><td>${v.unsafeEarlyRaw}/${v.unsafeDenominator}</td><td>${v.classifierOverheadMsPerBoundary} ms</td></tr>`);
+$('cmp').innerHTML='<tr style="text-align:left;color:var(--mute)"><th>System</th><th>Route accuracy</th><th>Driver-call rate</th><th>Unsafe early</th><th>Router overhead</th></tr>'+rows.join('')}}catch(e){$('lrn').textContent='No learning data yet. Run: uv run python -m app.learning.run'}}
+learning();
 $('new').onclick=()=>start('applies');$('newack').onclick=()=>start('ack_only');
 $('reconnect').onclick=async()=>{await j(`/api/incidents/${iid}/reconnect`,{});load()};
 const say=r=>{$('say').hidden=false;$('say').textContent=r.response+`   [${r.routes.join(' → ')} · driver calls: ${r.driverCalls} · ${r.latencyMs}ms]`};

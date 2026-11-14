@@ -97,6 +97,16 @@ def reject(iid: str, body: Decision):
         raise HTTPException(409, str(e))
 
 
+@app.get("/api/learning")
+def learning():
+    """Classifier releases (no weights), their status, and the latest evaluation report: MongoDB is the record."""
+    d = db()
+    return _clean({
+        "active": engine.active_version(),
+        "releases": list(d.classifier_releases.find({}, {"weights": 0}).sort("createdAt", -1)),
+        "latest": d.eval_reports.find_one({}, sort=[("at", -1)])})
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")

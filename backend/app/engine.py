@@ -11,6 +11,25 @@ from pymongo.errors import DuplicateKeyError
 from . import classifier, driver, policy, responses, simulator
 from .db import db, now_ms
 
+_routers: dict = {}
+
+
+def active_version() -> str:
+    """The promoted classifier release for NEW sessions; bootstrap if none has passed the gate."""
+    rel = db().classifier_releases.find_one({"status": "active"}, {"_id": 1})
+    return rel["_id"] if rel else classifier.VERSION
+
+
+def _route(version: str, snap: dict):
+    """Pinned release for this incident. A trained release is loaded from MongoDB (immutable record)."""
+    if version == classifier.VERSION:
+        return classifier.classify(snap)
+    if version not in _routers:
+        from .learning.runtime import TrainedRouter
+        _routers[version] = TrainedRouter(db().classifier_releases.find_one({"_id": version}))
+    return _routers[version].classify(snap)
+
+
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
@@ -25,7 +44,7 @@ def _lock(incident_id: str) -> threading.Lock:
 def open_incident(flight_id: str) -> dict:
     inc = {"_id": f"INC-{uuid.uuid4().hex[:8]}", "flightId": flight_id, "state": "investigating", "revision": 0,
            "approval": None, "command": None, "resolution": None, "commandSeq": 0, "createdAt": now_ms(),
-           "classifierVersion": classifier.VERSION, "label": simulator.LABEL}
+           "classifierVersion": active_version(), "label": simulator.LABEL}
     db().incidents.insert_one(inc)
     return inc
 
@@ -65,11 +84,17 @@ def observe(inc: dict) -> tuple[dict, dict]:
     return out[0], out[1]
 
 
-def _snapshot(inc: dict, intent: str, read_ids: list, driver_calls: int) -> dict:
+def _snapshot(inc: dict, intent: str, read_ids: list, driver_calls: int, text: str = "", src=None, disp=None) -> dict:
     cmd = inc.get("command")
+    ap = inc.get("approval")
+    read = bool(read_ids)
     return {"incidentId": inc["_id"], "revision": inc["revision"], "state": inc["state"], "intent": intent,
-            "readThisTurn": bool(read_ids), "evidenceIds": read_ids, "driverCalls": driver_calls,
-            "commandAcked": bool(cmd and cmd["status"] == "acked" and inc["state"] == "refresh_pending")}
+            "text": text, "readThisTurn": read, "evidenceIds": read_ids, "driverCalls": driver_calls,
+            "commandAcked": bool(cmd and cmd["status"] == "acked" and inc["state"] == "refresh_pending"),
+            "approvalPending": bool(ap and ap["status"] == "pending"),
+            "evUnavailable": bool(read and not (src and src["available"] and disp and disp["available"])),
+            "evMismatch": bool(read and src and disp and src["available"] and disp["available"]
+                               and not policy.same_target(src, disp))}
 
 
 # ---------- approval / command (server-enforced; the classifier can never reach these) ----------
@@ -141,6 +166,8 @@ def _respond(inc: dict, intent: str, reason: str, src, disp) -> tuple[str, dict]
     fid = inc["flightId"]
     if reason == "approval_is_ui_only":
         return responses.render("approval_is_ui_only", fid, None, None), inc
+    if intent == "unknown":
+        intent = "status_query"  # a learned route may answer, but only with the read-only template; never closes
     if not (src and src["available"]):
         return responses.render("unavailable", fid, src, disp, {"system": "airline feed"}), inc
     if not (disp and disp["available"]):
@@ -187,8 +214,8 @@ def handle_turn(incident_id: str, turn_id: str, text: str) -> dict:
         for step in range(policy.MAX_STEPS):
             started = time.perf_counter()
             inc = get_incident(incident_id)  # reload: revision may have changed
-            snap = _snapshot(inc, intent, read_ids, driver_calls)
-            d, override = policy.gate(classifier.classify(snap), snap)
+            snap = _snapshot(inc, intent, read_ids, driver_calls, text, src, disp)
+            d, override = policy.gate(_route(inc["classifierVersion"], snap), snap)
             _record_decision(inc, turn_id, step, d, override, snap, started)
             route_trail.append(d.route)
             if d.route in ("READ_STATE", "VERIFY_EFFECT"):

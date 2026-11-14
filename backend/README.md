@@ -32,3 +32,30 @@ uv run pytest -q
 uv run uvicorn app.api:app --port 8000   # open http://localhost:8000
 ```
 Use **New (ACK-only display)** to see an acknowledged refresh that never applies: the incident cannot close.
+
+## Learning loop (increment 3) — `app/learning/`
+Offline, versioned, gated. Nothing is learned live. Data is derived from SIMULATED scenario families.
+
+`python -m app.learning.run` (from `backend/`): **generate** oracle-labeled boundary snapshots (`training_examples`,
+split by phrasing family) → **train** softmax classifier, fit/calibrate/threshold with leave-one-family-out CV on
+train+validation only (`classifier_releases`, immutable, sha256 digest) → **evaluate once** on a frozen test split vs
+always-driver and `bootstrap-v0` (`eval_reports`) → **promote** only if: zero unsafe early responses, no accuracy
+regression vs bootstrap. A release is pinned per incident at open; a promotion affects new sessions only. The deterministic
+policy gate runs on every release, and a learned route may only answer with the read-only status template unless the text is
+an explicit close request.
+
+Labels: oracle from the spec's evidence table (`oracle.py`), never driver output. Test splits are single-use: after a
+test set is evaluated it is renamed `burned_testN` and never trained or tuned on again; promote against a fresh one.
+
+### Results so far (real runs; see `eval_reports` for the stored records)
+Frozen test sets were consumed in this order. **No release has been promoted; the active router is still `bootstrap-v0`.**
+| Release | Frozen test | Result |
+|---|---|---|
+| `linear-a4f99355` | F5/F6 (burned_test1) | rejected: 21/114 unsafe early responses |
+| `linear-ae92b92d` | F8/F9 (burned_test2) | rejected: 7/147 unsafe early; accuracy 0.761 < bootstrap 0.778 |
+| `linear-ff7e0528` | F11/F12 (current test) | rejected: 0/147 unsafe, but accuracy 0.704 < bootstrap 0.778 (abstains to driver more) |
+
+On the last set `bootstrap-v0` itself had 7/147 unsafe early responses (keyword false positives), so it would not pass the
+safety gate either. Hash-n-gram linear models trained on ~870 templated examples do not beat keywords on new wording;
+the real lever is more reviewed real turns (collected in `turns`/`decisions`). Not measured: driver latency, end-to-end
+or voice latency (no driver/ElevenLabs configured). Classifier overhead only is reported.
