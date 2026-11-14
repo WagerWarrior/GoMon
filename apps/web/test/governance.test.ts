@@ -27,7 +27,7 @@ test("lock promotes the item to canonical memory with lock proof, clears TTL, an
     assert.equal(mem!.sourceRefs.length, 1); assert.equal(mem!.teamId, TEAM); assert.equal(mem!.projectId, PROJECT);
     const item = await d.collection("call_items").findOne({ _id: new ObjectId(itemId) });
     assert.equal(item!.status, "promoted"); assert.equal("expiresAt" in item!, false);
-    assert.equal(await d.collection("audit_events").countDocuments({ type: "memory_promoted" }), 1);
+    assert.equal(await d.collection("audit_events").countDocuments({ type: "memory_locked" }), 1);
     const again = await lockItem(ctx, itemId, "Priya"); assert.equal(again.already, true);
     assert.equal(await d.collection("memories").countDocuments({}), 1);
   } finally { await done(); }
@@ -107,5 +107,23 @@ test("enqueueAction writes the outbox only, and a double click resolves to ONE a
     const docs = await d.collection("actions").find({}).toArray();
     assert.equal(docs.length, 1); assert.equal(docs[0].status, "queued"); assert.equal(docs[0].requestedBy, "Priya");
     assert.equal(docs[0].externalId, undefined); assert.equal(docs[0].policyCheck, undefined); // connector owns both
+  } finally { await done(); }
+});
+
+test("lock matches the worker's schema: next D-NN key after seeded keys, sourceRefs type call with ObjectIds, updatedAt, via human", async () => {
+  const { ctx, d, done } = await freshDb();
+  try {
+    await d.collection("memories").insertOne({ teamId: TEAM, projectId: PROJECT, key: "D-09", kind: "decision", text: "seeded", status: "active", version: 1, origin: "doc", sourceRefs: [{ type: "doc", path: "x.md" }] });
+    const { itemId } = await seedCall(d);
+    const { memoryId } = await lockItem(ctx, itemId, "Priya");
+    const m: any = await d.collection("memories").findOne({ _id: new ObjectId(memoryId) });
+    assert.equal(m.key, "D-10");
+    assert.equal(m.sourceRefs[0].type, "call"); assert.ok(m.sourceRefs[0].itemId instanceof ObjectId); assert.ok(m.sourceRefs[0].utteranceIds[0] instanceof ObjectId);
+    assert.ok(m.updatedAt instanceof Date); assert.equal(m.lock.via, "human");
+    const { memoryId: v2 } = await correctMemory(ctx, memoryId, "seeded, corrected", "Priya");
+    const n: any = await d.collection("memories").findOne({ _id: new ObjectId(v2) });
+    assert.equal(n.key, "D-10", "a correction keeps the key"); assert.ok(n.updatedAt > m.updatedAt);
+    const old: any = await d.collection("memories").findOne({ _id: new ObjectId(memoryId) });
+    assert.ok(old.updatedAt > m.updatedAt, "superseded row gets updatedAt too");
   } finally { await done(); }
 });

@@ -1,61 +1,60 @@
 /**
- * Max (workspace): memory retrieval for the "Ask Gomon" memory on/off proof.
- * Voyage embeddings on `memories.embedding` + an Atlas Vector Search index. Rob's agent loop owns the
- * production retrieval (hybrid); this is the same contract (active, team+project scoped) so the two agree.
+ * Max (workspace): memory retrieval for "Ask Gomon". This is Rob's hybrid retrieval (apps/worker/src/retrieve.ts),
+ * ported so the workspace and the voice agent rank memories the same way, on the same Atlas indexes:
+ *  - memories_auto: Vector Search with Atlas Automated Embedding (Atlas embeds `text` and the query with Voyage)
+ *  - memories_text: Atlas Search (lexical, so "R-12" matches)
+ * fused with $rankFusion, all pre-filtered to team, project and active. Exact keys and very fresh memories are added
+ * straight from the collection (the search index tails the oplog). Indexes are created by `apps/worker npm run setup`.
  */
 import type { Db, ObjectId } from "mongodb";
 
-export const VECTOR_INDEX = "memories_vector";
-export const DIMS = 1024;
+export const INDEX = { vector: "memories_auto", text: "memories_text" } as const;
+const FRESH_MS = 60_000;
 
-type EmbedFn = (texts: string[], kind: "document" | "query") => Promise<number[][]>;
+export type Hit = { _id: ObjectId; key?: string; kind?: string; text: string; version?: number; origin?: string; score: number; via: string[] };
+type Scope = { teamId: string; projectId: string };
 
-export const voyageEmbed: EmbedFn = async (texts, kind) => {
-  const key = process.env.VOYAGE_API_KEY;
-  if (!key) throw new Error("VOYAGE_API_KEY is not set");
-  const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-    method: "POST",
-    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({ input: texts, model: process.env.VOYAGE_MODEL || "voyage-4", input_type: kind, output_dimension: DIMS }),
-    signal: AbortSignal.timeout(15000),
-  });
-  const j: any = await res.json().catch(() => null);
-  if (!res.ok || !j?.data) throw new Error(`voyage ${res.status}: ${j?.detail ?? "no data"}`);
-  return j.data.map((x: any) => x.embedding as number[]);
-};
-
-/** Embed active memories that have no vector yet (new locks, corrections). Returns how many were embedded. */
-export async function embedMissing(d: Db, scope: { teamId: string; projectId: string }, embed: EmbedFn = voyageEmbed): Promise<number> {
-  const col = d.collection("memories");
-  const todo = await col.find({ ...scope, status: "active", embedding: { $exists: false } }, { projection: { text: 1 } }).limit(100).toArray();
-  if (!todo.length) return 0;
-  const vecs = await embed(todo.map((m) => String(m.text)), "document");
-  await col.bulkWrite(todo.map((m, i) => ({ updateOne: { filter: { _id: m._id }, update: { $set: { embedding: vecs[i], embeddingModel: process.env.VOYAGE_MODEL || "voyage-4" } } } })));
-  return todo.length;
+/** Explicit IDs in a question ("R-12", "d 09") as stored keys. */
+export function keysIn(q: string): string[] {
+  return [...new Set([...q.matchAll(/\b([a-z])[\s-]?(\d{1,3})\b/gi)].map((m) => `${m[1].toUpperCase()}-${m[2].padStart(2, "0")}`))];
 }
 
-/** Create the vector index if missing. Filter fields keep every query team-scoped and active-only. */
-export async function ensureVectorIndex(d: Db): Promise<"exists" | "created"> {
-  const col = d.collection("memories");
-  const have = await col.listSearchIndexes(VECTOR_INDEX).toArray();
-  if (have.length) return "exists";
-  await col.createSearchIndex({
-    name: VECTOR_INDEX, type: "vectorSearch",
-    definition: { fields: [
-      { type: "vector", path: "embedding", numDimensions: DIMS, similarity: "cosine" },
-      { type: "filter", path: "status" }, { type: "filter", path: "teamId" }, { type: "filter", path: "projectId" },
-    ] },
-  } as any);
-  return "created";
+/** Keyed hits first, then fused search hits, then fresh ones the index has not caught yet. No duplicates. */
+export function merge(fused: Hit[], exact: Hit[], fresh: Hit[]): Hit[] {
+  const out = fused.map((h) => ({ ...h, via: [...h.via] }));
+  const keyed: Hit[] = []; const late: Hit[] = [];
+  for (const m of exact) {
+    const i = out.findIndex((r) => String(r._id) === String(m._id));
+    if (i >= 0) { const [h] = out.splice(i, 1); keyed.push({ ...h, via: [...h.via, "key"] }); }
+    else if (!keyed.some((r) => String(r._id) === String(m._id))) keyed.push({ ...m, score: 0, via: ["key"] });
+  }
+  for (const m of fresh) {
+    const seen = [...keyed, ...out, ...late].some((r) => String(r._id) === String(m._id));
+    if (!seen) late.push({ ...m, score: 0, via: ["fresh"] });
+  }
+  return [...keyed, ...out, ...late];
 }
 
-export type Hit = { _id: ObjectId; key?: string; kind?: string; text: string; version?: number; score: number };
-
-export async function retrieve(d: Db, scope: { teamId: string; projectId: string }, question: string, k = 4, embed: EmbedFn = voyageEmbed): Promise<Hit[]> {
-  const [qv] = await embed([question], "query");
-  return d.collection("memories").aggregate<Hit>([
-    { $vectorSearch: { index: VECTOR_INDEX, path: "embedding", queryVector: qv, numCandidates: 100, limit: k,
-        filter: { status: "active", teamId: scope.teamId, projectId: scope.projectId } } },
-    { $project: { key: 1, kind: 1, text: 1, version: 1, score: { $meta: "vectorSearchScore" } } },
+export async function retrieve(d: Db, scope: Scope, question: string, k = 4, embedModel = process.env.EMBED_MODEL || "voyage-4"): Promise<Hit[]> {
+  const filter = { teamId: scope.teamId, projectId: scope.projectId, status: "active" };
+  const proj = { key: 1, kind: 1, text: 1, origin: 1, version: 1 };
+  const col = d.collection("memories");
+  const fusedRaw = await col.aggregate<any>([
+    { $rankFusion: {
+        input: { pipelines: {
+          vector: [{ $vectorSearch: { index: INDEX.vector, path: "text", query: question, model: embedModel, numCandidates: 150, limit: 12, filter } }],
+          text: [{ $search: { index: INDEX.text, compound: {
+            must: [{ text: { query: question, path: ["text", "key"] } }],
+            filter: [{ equals: { path: "teamId", value: scope.teamId } }, { equals: { path: "projectId", value: scope.projectId } }, { equals: { path: "status", value: "active" } }],
+          } } }, { $limit: 12 }],
+        } },
+        combination: { weights: { vector: 1, text: 1 } }, scoreDetails: true } },
+    { $limit: k },
+    { $project: { ...proj, score: { $meta: "score" }, details: { $meta: "scoreDetails" } } },
   ]).toArray();
+  const fused: Hit[] = fusedRaw.map(({ details, ...m }) => ({ ...m, via: (details?.details ?? []).filter((x: any) => typeof x.rank === "number").map((x: any) => x.inputPipelineName) }));
+  const keys = keysIn(question);
+  const exact = keys.length ? ((await col.find({ ...filter, key: { $in: keys } }, { projection: proj }).toArray()) as any as Hit[]) : [];
+  const fresh = (await col.find({ ...filter, updatedAt: { $gte: new Date(Date.now() - FRESH_MS) } }, { projection: proj }).limit(5).toArray()) as any as Hit[];
+  return merge(fused, exact, fresh).slice(0, Math.max(k, keys.length));
 }

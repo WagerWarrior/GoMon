@@ -13,6 +13,7 @@ export async function freshDb() {
   await d.collection("policies").insertMany([
     { teamId: TEAM, projectId: PROJECT, action: "lock_decision", allowedRoles: ["lead", "engineer"] },
     { teamId: TEAM, projectId: PROJECT, action: "forget_memory", allowedRoles: ["lead"] },
+    { teamId: TEAM, projectId: PROJECT, action: "correct_memory", allowedRoles: ["lead", "engineer"] },
     { teamId: TEAM, projectId: PROJECT, action: "create_issue", allowedRoles: ["lead", "engineer"] },
     { teamId: TEAM, projectId: PROJECT, action: "post_slack", allowedRoles: ["lead", "engineer"] }]);
   const ctx = { c, d, teamId: TEAM, projectId: PROJECT };

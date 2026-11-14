@@ -25,7 +25,7 @@ export const GOMON_STATES: Record<GomonStateKey, GomonState> = {
 export const FRESH_MS = 6000;
 
 const EVENT_FACE: Record<string, GomonStateKey> = {
-  memory_promoted: "locked", item_rejected: "vetoed", action_sent: "acting", action_requested: "acting",
+  memory_promoted: "locked", memory_locked: "locked", item_rejected: "vetoed", action_sent: "acting", action_requested: "acting",
   memory_corrected: "recalling", memory_forgotten: "vetoed",
 };
 

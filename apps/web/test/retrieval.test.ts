@@ -1,30 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { freshDb, seedCall, TEAM, PROJECT } from "./helpers";
-import { lockItem, correctMemory, forgetMemory } from "../lib/governance";
-import { embedMissing } from "../lib/retrieval";
+import { ObjectId } from "mongodb";
+import { freshDb, seedCall } from "./helpers";
+import { correctMemory, lockItem } from "../lib/governance";
+import { keysIn, merge, type Hit } from "../lib/retrieval";
 
-const sc = { teamId: TEAM, projectId: PROJECT };
-const fakeEmbed = (seen: string[]) => async (texts: string[]) => { seen.push(...texts); return texts.map(() => [1, 0, 0]); };
+const h = (id: ObjectId, via: string[] = ["vector"], score = 0.5): Hit => ({ _id: id, text: String(id), score, via });
 
-test("embedMissing: only active, in-scope memories without a vector; a correction becomes searchable, the old and forgotten never re-embed", async () => {
+test("keysIn: explicit memory IDs in speech resolve to stored keys", () => {
+  assert.deepEqual(keysIn("what did we say in R-12 and d 9?"), ["R-12", "D-09"]);
+  assert.deepEqual(keysIn("no ids here"), []);
+});
+
+test("merge: keyed hits first (moved, not duplicated), then fused, then fresh-only; nothing appears twice", () => {
+  const [a, b, c, x] = [new ObjectId(), new ObjectId(), new ObjectId(), new ObjectId()];
+  const out = merge([h(a), h(b, ["text"])], [h(b)], [h(a), h(c)]);
+  assert.deepEqual(out.map((r) => String(r._id)), [b, a, c].map(String));
+  assert.deepEqual(out[0].via, ["text", "key"]);
+  assert.deepEqual(out[2].via, ["fresh"]);
+  assert.deepEqual(merge([], [h(x)], []).map((r) => r.via), [["key"]], "a keyed memory the index missed still comes back");
+});
+
+test("a correction carries no stored vector (Atlas embeds text server-side), so the new text is what gets searched", async () => {
   const { ctx, d, done } = await freshDb();
   try {
     const { itemId } = await seedCall(d);
     const { memoryId } = await lockItem(ctx, itemId, "Priya");
-    await d.collection("memories").insertOne({ teamId: "other-team", projectId: PROJECT, status: "active", text: "not ours" });
-
-    let seen: string[] = [];
-    assert.equal(await embedMissing(d, sc, fakeEmbed(seen)), 1);
-    assert.deepEqual(seen, ["Tiered token-bucket limits with enterprise burst"]);
-    assert.equal(await embedMissing(d, sc, fakeEmbed((seen = []))), 0, "idempotent: nothing left to embed");
-
-    const { memoryId: v2 } = await correctMemory(ctx, String(memoryId), "Tiered limits, burst 2,000 req/s", "Priya");
-    assert.equal(await embedMissing(d, sc, fakeEmbed((seen = []))), 1);
-    assert.deepEqual(seen, ["Tiered limits, burst 2,000 req/s"]);
-
-    await forgetMemory(ctx, String(v2), "Priya");
-    assert.equal(await embedMissing(d, sc, fakeEmbed((seen = []))), 0);
-    assert.equal(await d.collection("memories").countDocuments({ teamId: "other-team", embedding: { $exists: true } }), 0, "other teams untouched");
+    await d.collection("memories").updateOne({ _id: new ObjectId(memoryId) }, { $set: { embedding: [1, 0, 0] } }); // legacy client vector
+    const { memoryId: v2 } = await correctMemory(ctx, memoryId, "Tiered limits, burst 2,000 req/s", "Priya");
+    const n: any = await d.collection("memories").findOne({ _id: new ObjectId(v2) });
+    assert.equal(n.embedding, undefined); assert.equal(n.text, "Tiered limits, burst 2,000 req/s");
   } finally { await done(); }
 });

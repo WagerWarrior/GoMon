@@ -31,6 +31,21 @@ const oid = (id: string) => new ObjectId(id);
 
 type Ctx = { c: MongoClient; d: Db; teamId: string; projectId: string };
 
+/** Same key scheme as apps/worker (Rob): one counter per team/project/prefix, continuing after seeded keys. */
+const PREFIX: Record<string, string> = { decision: "D", requirement: "R", constraint: "C", risk: "K", open_question: "Q", action: "T", assumption: "A", interface: "I", alternative: "L" };
+async function nextKey(ctx: Ctx, kind: string, session: ClientSession): Promise<string | undefined> {
+  const p = PREFIX[kind]; if (!p) return undefined;
+  const id = `${ctx.teamId}/${ctx.projectId}/${p}`;
+  const counters = ctx.d.collection<{ _id: string; n: number }>("counters");
+  let row = await counters.findOneAndUpdate({ _id: id }, { $inc: { n: 1 } }, { session, returnDocument: "after" });
+  if (!row) {
+    const existing = await ctx.d.collection("memories").find({ teamId: ctx.teamId, projectId: ctx.projectId, key: { $regex: `^${p}-\\d+$` } }, { session, projection: { key: 1 } }).toArray();
+    const max = existing.reduce((m, d) => Math.max(m, Number(String(d.key).split("-")[1] ?? 0)), 0);
+    row = await counters.findOneAndUpdate({ _id: id }, { $setOnInsert: { n: max + 1 } }, { session, upsert: true, returnDocument: "after" });
+  }
+  return `${p}-${String(row!.n).padStart(2, "0")}`;
+}
+
 function audit(ctx: Ctx, callId: string | undefined, type: string, actor: string, reason: string, ref: Record<string, unknown>) {
   return { callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), type, actor, reason, ref };
 }
@@ -46,14 +61,15 @@ export async function lockItem(ctx: Ctx, itemId: string, actor: string) {
     if (item.status === "promoted") return { memoryId: String(item.memoryId ?? ""), already: true };
     const call = (await ctx.d.collection<CallDoc>("calls").findOne({ _id: item.callId }, { session })) as CallDoc | null;
     const participants = call?.participants?.length ? call.participants : [actor];
+    const now = new Date(); const key = await nextKey(ctx, item.kind, session);
     const mem = {
-      teamId: ctx.teamId, projectId: ctx.projectId, kind: item.kind, text: item.text, status: "active", version: 1, supersedes: null,
-      origin: "call", sourceRefs: [{ type: "call_item", id: String(item._id), utteranceIds: (item.sourceUtteranceIds ?? []).map(String), callId: item.callId }],
-      lock: { lockedAt: new Date(), participants, lockedBy: actor, via: "workspace" }, createdAt: new Date(),
+      teamId: ctx.teamId, projectId: ctx.projectId, ...(key ? { key } : {}), kind: item.kind, text: item.text, status: "active", version: 1,
+      origin: "call", sourceRefs: [{ type: "call", callId: item.callId, itemId: item._id, utteranceIds: item.sourceUtteranceIds ?? [] }],
+      lock: { lockedAt: now, participants, lockedBy: actor, via: "human" }, createdAt: now, updatedAt: now,
     };
     const { insertedId } = await ctx.d.collection("memories").insertOne(mem, { session });
-    await items.updateOne({ _id: item._id }, { $set: { status: "promoted", memoryId: insertedId }, $unset: { expiresAt: "" } }, { session });
-    await ctx.d.collection("audit_events").insertOne(audit(ctx, item.callId, "memory_promoted", actor, `locked via workspace (${policy.reason})`, { itemId, memoryId: String(insertedId) }), { session });
+    await items.updateOne({ _id: item._id }, { $set: { status: "promoted", memoryId: insertedId, updatedAt: now }, $unset: { expiresAt: "", lockAnnouncedAt: "" } }, { session });
+    await ctx.d.collection("audit_events").insertOne(audit(ctx, item.callId, "memory_locked", actor, `locked via workspace (${policy.reason})`, { itemId, memoryId: String(insertedId), key }), { session });
     return { memoryId: String(insertedId), already: false };
   });
 }
@@ -64,7 +80,7 @@ export async function rejectItem(ctx: Ctx, itemId: string, actor: string) {
     const item = await items.findOne({ _id: oid(itemId) }, { session });
     if (!item) throw new NotFound("item");
     if (item.status === "promoted") throw new Error("already promoted; use correct or forget on the memory");
-    await items.updateOne({ _id: item._id }, { $set: { status: "rejected", rejectedBy: actor } }, { session });
+    await items.updateOne({ _id: item._id }, { $set: { status: "rejected", rejectedBy: actor, updatedAt: new Date() } }, { session });
     await ctx.d.collection("audit_events").insertOne(audit(ctx, item.callId, "item_rejected", actor, "rejected in workspace", { itemId }), { session });
     return { ok: true };
   });
@@ -72,21 +88,23 @@ export async function rejectItem(ctx: Ctx, itemId: string, actor: string) {
 
 /** Supersede: old memory leaves retrieval immediately (status superseded), new version is active with history links. */
 export async function correctMemory(ctx: Ctx, memoryId: string, newText: string, actor: string) {
-  const policy = await checkPolicy(ctx.d, ctx.teamId, ctx.projectId, actor, "lock_decision");
+  const policy = await checkPolicy(ctx.d, ctx.teamId, ctx.projectId, actor, "correct_memory");
   if (!policy.allowed) { await ctx.d.collection("audit_events").insertOne(audit(ctx, undefined, "correct_denied", actor, policy.reason, { memoryId })); throw new PolicyDenied(policy); }
   return tx(ctx.c, async (session) => {
     const mems = ctx.d.collection("memories");
     const old = await mems.findOne({ _id: oid(memoryId), teamId: ctx.teamId, projectId: ctx.projectId }, { session });
     if (!old) throw new NotFound("memory");
     if (old.status !== "active") throw new Error(`memory is ${old.status}; only active memories can be corrected`);
+    const now = new Date();
     const next = {
-      ...old, _id: undefined, text: newText, version: (old.version ?? 1) + 1, supersedes: old._id, status: "active", createdAt: new Date(),
-      lock: { ...(old.lock ?? {}), lockedAt: new Date(), lockedBy: actor, via: "workspace-correction", participants: old.lock?.participants?.length ? old.lock.participants : [actor] },
+      ...old, _id: undefined, text: newText, version: (old.version ?? 1) + 1, supersedes: old._id, status: "active", createdAt: now, updatedAt: now,
+      ...(old.origin === "call" ? { lock: { lockedAt: now, lockedBy: actor, via: "human", participants: [...new Set([...(old.lock?.participants ?? []), actor])] } } : {}),
     } as Record<string, unknown>;
+    delete next.supersededBy; delete next.supersededAt;
     delete next._id;
     delete next.embedding; delete next.embeddingModel; // the old vector describes the old text; re-embed the new one
     const { insertedId } = await mems.insertOne(next, { session });
-    await mems.updateOne({ _id: old._id }, { $set: { status: "superseded", supersededBy: insertedId, supersededAt: new Date() } }, { session });
+    await mems.updateOne({ _id: old._id }, { $set: { status: "superseded", supersededBy: insertedId, supersededAt: now, updatedAt: now } }, { session });
     await ctx.d.collection("audit_events").insertOne(audit(ctx, undefined, "memory_corrected", actor, "corrected in workspace", { memoryId, newMemoryId: String(insertedId), from: old.text, to: newText }), { session });
     return { memoryId: String(insertedId) };
   });
@@ -100,7 +118,7 @@ export async function forgetMemory(ctx: Ctx, memoryId: string, actor: string) {
     const mems = ctx.d.collection("memories");
     const m = await mems.findOne({ _id: oid(memoryId), teamId: ctx.teamId, projectId: ctx.projectId }, { session });
     if (!m) throw new NotFound("memory");
-    await mems.updateOne({ _id: m._id }, { $set: { status: "forgotten", forgottenAt: new Date(), forgottenBy: actor } }, { session });
+    await mems.updateOne({ _id: m._id }, { $set: { status: "forgotten", forgottenAt: new Date(), forgottenBy: actor, updatedAt: new Date() } }, { session });
     await ctx.d.collection("audit_events").insertOne(audit(ctx, undefined, "memory_forgotten", actor, "forgotten in workspace", { memoryId, text: m.text }), { session });
     return { ok: true };
   });

@@ -44,17 +44,11 @@ validator that requires them for active decisions accepts it.
 ## Not built / not measured
 Presence and live cursors (stretch). No latency numbers are claimed: the Timings panel shows only what the worker logs.
 
-## Ask Gomon: memory on vs off (Atlas Vector Search)
+## Ask Gomon: memory on vs off (Atlas hybrid retrieval)
 
-`npm run embed` creates the `memories_vector` index (vector + filters on status/teamId/projectId) and embeds
-active memories with Voyage (`voyage-4`, 1024 dims). `/api/ask` embeds anything new, then runs `$vectorSearch`
-(memory on) or skips retrieval (memory off); each ask is written to `audit_events` with the cited memory IDs.
-A correction drops the old vector, so the new text is re-embedded and the old meaning is never retrieved.
-Secrets come from the repo-root `.env` (git-ignored), loaded by `lib/db.ts`.
-
-## Gomon avatar (Max, design)
-
-- `components/GomonAvatar.tsx`: `<GomonAvatar state="locking" size={96} />`, the live leaf face (open-bot-avatar, MIT).
-- `lib/gomon/states.ts`: `GOMON_DEFINITION`, `GOMON_THEME` (leaf `#1f9d55`, eyes `#0b2418`), the seven `GOMON_STATES`, and `deriveGomonState(data, now)`, which picks the face from live Atlas data (veto window → Locking, fresh audit events → Locked / Vetoed / Acting / Recalling, Gomon's own utterance → Speaking, otherwise Listening). Tested in `test/gomon-state.test.ts`.
-- `/gomon`: every face, live. The workspace shows the current face in the strip under the header.
-- Design source and standalone showcase: `design/gomon/`.
+`/api/ask` uses the same hybrid retrieval as the voice agent (Rob, `apps/worker/src/retrieve.ts`): `$rankFusion` over
+`$vectorSearch` on `memories_auto` (Atlas Automated Embedding, Voyage server-side) and `$search` on `memories_text`,
+pre-filtered to team, project and active; exact keys ("R-12") and memories updated in the last minute are added
+directly. Memory off skips retrieval. With `LLM_PROVIDER=anthropic` + `LLM_API_KEY`, Claude answers from the cited
+memories only (`lib/answer.ts`); otherwise the top memory is quoted. Each ask goes to `audit_events` with the cited IDs.
+Indexes come from `cd apps/worker && npm run setup`. Secrets come from the repo-root `.env`, loaded by `lib/db.ts`.

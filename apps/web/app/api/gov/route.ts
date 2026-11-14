@@ -25,8 +25,8 @@ export async function POST(req: Request) {
         for (const m of mems) {
           const key = `${m._id}:v${m.version}`; // a corrected memory is a new version and may legitimately be sent again
           const payload = op === "create_issue"
-            ? { title: String(m.text).slice(0, 80), body: `${m.text}\n\nLocked on call \`${callId}\` by ${m.lock?.participants?.join(", ") ?? "team"}.\nMemory: \`${m._id}\` v${m.version}.` , labels: ["gomon", String(m.kind)] }
-            : { text: `Decision locked: ${m.text}`, callId, memoryId: String(m._id) };
+            ? { title: `${m.key ?? m.kind}: ${String(m.text).slice(0, 72)}`, body: `${m.text}\n\nLocked on call \`${callId}\` by ${m.lock?.participants?.join(", ") ?? "the team"}.\nMemory \`${m._id}\` v${m.version} (${m.key ?? m.kind}).`, labels: ["gomon", String(m.kind)] }
+            : { text: `Decision locked (${m.key ?? m.kind}): ${m.text}`, callId, memoryId: String(m._id) }; // same payloads as apps/worker enqueueForCall
           out.push(await enqueueAction(ctx, op, payload, actor, callId, key));
         }
         return Response.json({ queued: out });
