@@ -10,6 +10,8 @@ import FlowDiagram from "@/components/platform/FlowDiagram";
 import { CategoryPicker, ModePicker } from "@/components/platform/SessionBar";
 import { templates } from "@/lib/templates";
 import AutoRefresh from "@/components/platform/AutoRefresh";
+import RecapCard from "@/components/platform/RecapCard";
+import { recapOf } from "@/lib/recap";
 import { bursts, collapse } from "@/lib/group";
 import { clock, dur, when } from "@/lib/format";
 export const dynamic = "force-dynamic";
@@ -22,6 +24,8 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
   const [s, list, m, tpl] = await Promise.all([session(callId), sessions(), mission(callId), templates()]);
   const meta = list.find((x) => x.id === callId);
   if (!s.call) notFound();
+  const ended = s.call.status === "ended";
+  const rv = ended ? await recapOf(callId, s.call) : null;
   const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
   return (
     <div className={`ss ${tab === "live" ? "ss-live" : ""}`}>
@@ -35,9 +39,10 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
         <CategoryPicker callId={callId} current={meta?.category ?? "Design review"} />
         <nav className="ss-tabs"><Link href={href("live")} aria-current={tab === "live" ? "page" : undefined}>Live</Link><Link href={href("activity")} aria-current={tab === "activity" ? "page" : undefined}>Activity</Link></nav>
       </header>
+      {tab === "live" && rv?.recap && <RecapCard v={rv} ended strip />}
       {tab === "live"
         ? <SessionChat callId={callId} initialEntries={buildTimeline(s).slice(-400)} initialOps={m.ops} initialContext={m.context} />
-        : <SessionActivity callId={callId} s={s} />}
+        : <>{rv && <RecapCard v={rv} ended />}<SessionActivity callId={callId} s={s} /></>}
     </div>
   );
 }
