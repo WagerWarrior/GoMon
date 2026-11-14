@@ -52,7 +52,7 @@ export default function RecapCard({ v, ended, strip }: { v: RecapView; ended: bo
   return (
     <section className="p-card rc" id="recap">
       <div className="rc-h">
-        <div><span className="eyebrow">After-call recap · {when(v.recap.at)}</span><h2>{r.title.replace(/^Recap:\s*/, "")}</h2>{r.sub && <span className="muted small">{r.sub}</span>}</div>
+        <div><span className="eyebrow">After-call recap · {when(new Date(v.recap.at).toISOString())}</span><h2>{r.title.replace(/^Recap:\s*/, "")}</h2>{r.sub && <span className="muted small">{r.sub}</span>}</div>
         {dests}
       </div>
       {chips.length > 0 && <div className="rc-chips">{chips.map((c) => <span key={c}>{c}</span>)}</div>}
