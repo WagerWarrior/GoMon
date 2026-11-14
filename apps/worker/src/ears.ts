@@ -20,6 +20,9 @@ const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 /** Gomon's own voice comes back through the meeting audio: drop segments that mostly repeat a line it said in this window. */
 const ECHO_WINDOW_MS = 30_000;
 const ECHO_OVERLAP = 0.6;
+/** Without headphones the mic also hears the meeting: the same sentence arrives on both channels within a few seconds. */
+const DUP_WINDOW_MS = 4_000;
+const DUP_OVERLAP = 0.8;
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 1);
 
@@ -34,6 +37,17 @@ async function isEcho(c: Cols, callId: string, text: string): Promise<boolean> {
     if (s.status === "started" && u.length < 3) return true; // fragments heard while Gomon is talking
   }
   return false;
+}
+
+async function isDuplicate(c: Cols, callId: string, text: string): Promise<boolean> {
+  const u = new Set(words(text));
+  if (!u.size) return false;
+  const recent = await c.utterances.find({ callId, source: "scribe", receivedAt: { $gte: new Date(Date.now() - DUP_WINDOW_MS) } }).project({ text: 1 }).toArray();
+  return recent.some((r) => {
+    const o = new Set(words(String(r.text)));
+    const shared = [...u].filter((w) => o.has(w)).length;
+    return shared / u.size >= DUP_OVERLAP && shared / Math.max(1, o.size) >= DUP_OVERLAP;
+  });
 }
 
 function send(res: ServerResponse, status: number, data: unknown): void {
@@ -73,6 +87,7 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
       send(res, 200, { dropped: "echo" });
       return true;
     }
+    if (await isDuplicate(c, callId, text)) { send(res, 200, { dropped: "duplicate" }); return true; }
     const r = await postUtterance({ callId, text, speaker: { displayName: b.speaker }, source: "scribe", sourceKey: `scribe:${String(b.channel ?? "mic")}:${randomUUID()}` });
     send(res, r.status, r.data);
     return true;

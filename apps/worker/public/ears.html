@@ -85,10 +85,15 @@ async function connectScribe(channel) {
     else if (e.message_type === "committed_transcript" && e.text?.trim()) {
       $("p-" + channel).textContent = "";
       const speaker = channel === "mic" ? $("me").value : $("remote").value;
+      // Mic waits a moment: without headphones it also hears the meeting, and the meeting copy has the right speaker.
+      if (channel === "mic") await new Promise((r) => setTimeout(r, 700));
       const res = await fetch("/ears/utterance", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ callId: $("callId").value, speaker, text: e.text, channel }) });
       const out = await res.json();
-      log(`<b>${esc(speaker)}</b>${esc(e.text)}${out.dropped ? " (echo of Gomon, dropped)" : ""}`, out.dropped ? "drop" : "");
-    } else if (e.error || /error|limit|exceeded|throttled/.test(e.message_type)) status(channel, `${e.message_type}: ${e.error ?? e.message ?? ""}`, "err");
+      log(`<b>${esc(speaker)}</b>${esc(e.text)}${out.dropped ? ` (${out.dropped === "echo" ? "echo of Gomon" : "heard on both"}, dropped)` : ""}`, out.dropped ? "drop" : "");
+    } else if (e.error || /error|limit|exceeded|throttled/.test(e.message_type)) {
+      status(channel, `${e.message_type}: ${e.error ?? e.message ?? ""}`, "err");
+      log(`<b>${channel}</b>Scribe ${esc(e.message_type)}: ${esc(String(e.error ?? e.message ?? ""))}`, "drop");
+    }
   };
   ws.onclose = () => {
     if (!running) return status(channel, "off");
@@ -99,45 +104,61 @@ async function connectScribe(channel) {
 }
 const stream = (channel) => streams.find((s) => s.channel === channel);
 
+// One AudioContext, created and resumed synchronously inside the click: created after an await, Chrome's autoplay policy
+// starts it suspended and the capture graph never runs (silence to Scribe, no transcripts).
+let ctx = null;
+let workletReady = null;
+
 async function startChannel(channel, media) {
-  const ctx = new AudioContext();
-  await ctx.audioWorklet.addModule(worklet);
+  await workletReady;
   const src = ctx.createMediaStreamSource(media);
   const node = new AudioWorkletNode(ctx, "pcm");
-  const entry = { channel, ctx, media, ws: await connectScribe(channel), buf: [] };
+  const entry = { channel, media, ws: await connectScribe(channel), buf: [] };
   streams.push(entry);
-  let pending = 0;
+  let pending = 0, peak = 0, lastShown = 0;
   node.port.onmessage = ({ data }) => {
     entry.buf.push(data); pending += data.length;
+    for (let i = 0; i < data.length; i += 8) peak = Math.max(peak, Math.abs(data[i]));
     if (pending < ctx.sampleRate / 10) return; // send every ~100 ms
     const all = new Float32Array(pending); let o = 0;
     for (const b of entry.buf) { all.set(b, o); o += b.length; }
     entry.buf = []; pending = 0;
-    if (entry.ws.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: b64(toPcm16(all, ctx.sampleRate)), commit: false, sample_rate: RATE }));
+    if (entry.ws.readyState === WebSocket.OPEN) {
+      entry.ws.send(JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: b64(toPcm16(all, ctx.sampleRate)), commit: false, sample_rate: RATE }));
+      if (performance.now() - lastShown > 500) { status(channel, `live · level ${"▮".repeat(Math.min(10, Math.round(peak * 30)))}${peak < 0.003 ? " (silent)" : ""}`, "live"); lastShown = performance.now(); peak = 0; }
+    }
   };
   src.connect(node);
+  node.connect(ctx.destination); // keeps the node pulled by the graph; it outputs silence
   media.getAudioTracks()[0].onended = () => status(channel, "source ended", "err");
 }
 
 async function start() {
   if (!$("callId").value.trim()) return alert("Call ID is required (the callId Gomon joined with).");
   running = true;
+  ctx = new AudioContext();
+  void ctx.resume();
+  workletReady = ctx.audioWorklet.addModule(worklet);
   $("start").textContent = "Stop"; $("start").className = "stop";
   try {
     if ($("useTab").checked) {
       const tab = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false }, selfBrowserSurface: "exclude" });
-      if (!tab.getAudioTracks().length) { status("meeting", "no tab audio shared", "err"); }
+      if (!tab.getAudioTracks().length) { status("meeting", "no tab audio: share the Meet tab with 'Also share tab audio' on", "err"); }
       else { tab.getVideoTracks().forEach((t) => { t.enabled = false; }); await startChannel("meeting", tab); }
     }
     if ($("useMic").checked) {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       await startChannel("mic", mic);
     }
+    if (ctx.state !== "running") await ctx.resume();
+    log(`<b>listening</b>audio ${ctx.state}, ${ctx.sampleRate} Hz → 16 kHz, model ${MODEL}`);
   } catch (err) { log(`<b>error</b>${esc(String(err))}`, "drop"); }
 }
 function stop() {
   running = false;
-  for (const s of streams.splice(0)) { s.ws.close(); s.media.getTracks().forEach((t) => t.stop()); void s.ctx.close(); status(s.channel, "off"); }
+  for (const s of streams.splice(0)) { s.ws.close(); s.media.getTracks().forEach((t) => t.stop()); status(s.channel, "off"); }
+  if (ctx) void ctx.close();
+  ctx = null;
   $("start").textContent = "Start listening"; $("start").className = "";
 }
 $("start").onclick = () => (running ? stop() : start());
