@@ -103,10 +103,12 @@ Rules:
 - suggestion: only a strong, specific alternative design (max 30 words) that the memories support and nobody has raised; almost always empty.`;
 }
 
-function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], workspace: Workspace | null): string {
+function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], extra: CallContext): string {
   const fmt = (l: TurnLine) => `[${l.id}] ${l.speaker}: ${l.text}`;
+  const { workspace, callSummary } = extra;
   return [
     ...(workspace ? ["THIS CALL:", workspace.header, "", "WORKSPACE (previous calls, GitHub, database):", ...workspace.sources.map((s) => `- id=${s.id} ${s.line}`), ""] : []),
+    ...(callSummary ? ["CALL SO FAR (rolling summary of earlier turns in this call):", callSummary, ""] : []),
     "MEMORIES (canonical team memory, retrieved for these utterances):",
     memories.length ? memories.map((m) => `- id=${m.id} key=${m.key ?? "-"} kind=${m.kind}: ${m.text}`).join("\n") : "(none)",
     "",
@@ -125,9 +127,11 @@ function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories
 type MessagesResponse = { content?: { type: string; text?: string }[]; stop_reason?: string; error?: { message: string }; usage?: unknown };
 
 export type TemplateHints = { persona: string; captureKinds: readonly string[] };
+/** Context beyond the turn window: workspace (only when addressed) and the rolling call summary (`calls.summary`). */
+export type CallContext = { workspace: Workspace | null; callSummary: string };
 
 export const analyze = traceable(
-  async (recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], tpl: TemplateHints, workspace: Workspace | null = null): Promise<Analysis> => {
+  async (recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], tpl: TemplateHints, extra: CallContext): Promise<Analysis> => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": config.llmKey(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -135,7 +139,7 @@ export const analyze = traceable(
         model: config.analyzeModel,
         max_tokens: 2048,
         system: system(config.agentName, tpl.persona, tpl.captureKinds),
-        messages: [{ role: "user", content: user(recent, batch, items, memories, wake, workspace) }],
+        messages: [{ role: "user", content: user(recent, batch, items, memories, wake, extra) }],
         output_config: { format: { type: "json_schema", schema: SCHEMA } },
       }),
     });

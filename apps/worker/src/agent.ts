@@ -10,6 +10,7 @@ import { parseWake } from "./wake.ts";
 import { SPEAKING, templateFor } from "./templates.ts";
 import { postToMeetingChat, resolveLink } from "./links.ts";
 import { workspaceFor, type Workspace } from "./context.ts";
+import { maybeRefreshSummary } from "./summary.ts";
 
 export type Stored = Utterance & { _id: ObjectId };
 
@@ -119,7 +120,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text })),
       wakes.map((x) => ({ id: String(x.b._id), heardAs: x.w.heardAs ?? "" })),
       { persona: tpl.persona, captureKinds: tpl.captureKinds },
-      workspace,
+      { workspace, callSummary: typeof call?.summary === "string" ? call.summary : "" },
     );
     analyzeMs = Date.now() - tA;
   } finally {
@@ -272,6 +273,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   }
 
   await setState(ctx, u.callId, "listening", "listening");
+  // Off the critical path: keep the rolling call summary current so later turns see the whole call.
+  void maybeRefreshSummary(ctx, u.callId, u.seq).catch((e) => console.error("[summary]", e instanceof Error ? e.message : e));
   const totalMs = Date.now() - t0;
   await Promise.all([
     ctx.c.agentEvents.insertOne({

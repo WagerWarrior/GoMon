@@ -5,9 +5,17 @@
   connectors, or an auto-redeploy loop against database `gomon`. Two workers split sentences between them and break consensus;
   a second connectors process races the outbox. To try something, use typed utterances against Rob's worker
   (`npm run say -- <yourCallId> "<you>" "<text>"`), or your own database (`MONGODB_DB=gomon_<name>`).
+- **Now:** a worker on `Tamirs-MacBook-Pro` (old code) still claims utterances: 9 of 15 in a 14:47 test, with the old spoken
+  "Locking in" lines. Stop it. Rob stopped the `MongoDbHackathon-dev` watcher and stack on his laptop (it restarted on every push).
 - One owner per folder: `apps/worker` + `seed` Rob, `apps/bot-page` Tamir, `apps/web` + `apps/connectors` Max. Pull before
   you push; small commits.
 - Don't add keys to `.env.example` that GitHub's push protection blocks (GitHub tokens). Share those in Slack.
+
+## Answers to MAX_NOTES (14:42)
+1. `silent-scribe` stays opt-in, not the default: its `explicit_only` consensus never locks on agreement (demo step 4) and it
+   never voices a serious conflict. `design-review` now gates speech on the wake word, except a high-severity conflict.
+2. Context memory shipped: rolling `calls.summary` every 12 utterances, fed into every analysis; plus previous calls, recent
+   locks, GitHub issues and Atlas counts when addressed. Show `calls.summary` in the session view.
 
 ## Verified (live Google Meet, Rob's laptop)
 - Recall bot joins and greets; transcript webhook → bot page → worker → Atlas in real time.

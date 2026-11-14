@@ -78,6 +78,10 @@ engineer create denied and audited; lead create succeeded; a template `voiceId` 
 - When addressed, the prompt also gets **workspace context** (`src/context.ts`): how long Gomon has been in the call, recent
   locked decisions with their call, previous calls with ≥10 utterances, the repo's latest GitHub issues/PRs (60 s cache), and
   Atlas memory counts. Each entry has a source id (`D-18`, `#14`, `call:<id>`, `atlas`).
+- **Rolling call summary** (`src/summary.ts`): `calls.summary` / `summarySeq` / `summaryAt`, refreshed off the critical path
+  every 12 utterances (previous summary + new turns, ≤120 words, thinking disabled), atomically claimed via
+  `calls.summarizing`. Every analysis sees it as CALL SO FAR, so Gomon can recall the start of a long call (verified: "what did
+  Tamir say about webhook retries at the start" answered from the summary, outside the 8-turn window).
 - Replies carry `replyKind`: `conversational` (about the call itself: "can you hear me"), `grounded` (must list `sources`; at
   least one must be in the provided context and every spoken key must be active, else replaced with "I don't have anything on
   that yet." and logged as `ungrounded_reply_dropped`), or `no_answer`.

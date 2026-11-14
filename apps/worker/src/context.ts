@@ -69,7 +69,7 @@ export async function workspaceFor(ctx: Ctx, callId: string): Promise<Workspace>
     line: `MongoDB Atlas database "gomon": active memories ${kinds.map((k) => `${k.n} ${k._id}`).join(", ") || "none"}.`,
   };
   return {
-    header: `This call: "${call?.title ?? "untitled"}", you joined about ${mins} minute${mins === 1 ? "" : "s"} ago and only heard what was said since then. GitHub repo: ${env.githubRepo()}.`,
+    header: `This call: "${call?.title ?? "untitled"}", you joined about ${mins} minute${mins === 1 ? "" : "s"} ago. What was said since then is in CALL SO FAR, OPEN CALL ITEMS and RECENT TURNS. GitHub repo: ${env.githubRepo()}.`,
     sources: [...locks, ...calls, ...issues, stats],
   };
 }
