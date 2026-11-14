@@ -51,3 +51,10 @@ active memories with Voyage (`voyage-4`, 1024 dims). `/api/ask` embeds anything 
 (memory on) or skips retrieval (memory off); each ask is written to `audit_events` with the cited memory IDs.
 A correction drops the old vector, so the new text is re-embedded and the old meaning is never retrieved.
 Secrets come from the repo-root `.env` (git-ignored), loaded by `lib/db.ts`.
+
+## Gomon avatar (Max, design)
+
+- `components/GomonAvatar.tsx`: `<GomonAvatar state="locking" size={96} />`, the live leaf face (open-bot-avatar, MIT).
+- `lib/gomon/states.ts`: `GOMON_DEFINITION`, `GOMON_THEME` (leaf `#1f9d55`, eyes `#0b2418`), the seven `GOMON_STATES`, and `deriveGomonState(data, now)`, which picks the face from live Atlas data (veto window → Locking, fresh audit events → Locked / Vetoed / Acting / Recalling, Gomon's own utterance → Speaking, otherwise Listening). Tested in `test/gomon-state.test.ts`.
+- `/gomon`: every face, live. The workspace shows the current face in the strip under the header.
+- Design source and standalone showcase: `design/gomon/`.

@@ -7,7 +7,7 @@ type Result = { answer: string; ms: number; cited: Cited[]; answeredBy?: "llm" |
 
 const SAMPLE = "Proposal: flat 100 requests per second per tenant for everyone, including enterprise";
 
-export default function AskPanel({ callId, actor }: { callId: string; actor: string }) {
+export default function AskPanel({ callId, actor, onBusy }: { callId: string; actor: string; onBusy?: (busy: boolean) => void }) {
   const [q, setQ] = useState(SAMPLE);
   const [busy, setBusy] = useState(false);
   const [on, setOn] = useState<Result | null>(null);
@@ -19,9 +19,9 @@ export default function AskPanel({ callId, actor }: { callId: string; actor: str
     return r.ok ? j : { error: j.error ?? `HTTP ${r.status}` };
   }
   async function run() {
-    setBusy(true);
+    setBusy(true); onBusy?.(true);
     const [a, b] = await Promise.all([ask(true), ask(false)]);
-    setOn(a); setOff(b); setBusy(false);
+    setOn(a); setOff(b); setBusy(false); onBusy?.(false);
   }
 
   return (

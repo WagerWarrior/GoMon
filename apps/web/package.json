@@ -14,9 +14,10 @@
     "embed": "tsx dev/embed.mts"
   },
   "dependencies": {
-    "mongodb": "^7.0.0",
     "mermaid": "^11.0.0",
+    "mongodb": "^7.0.0",
     "next": "^15.5.0",
+    "open-bot-avatar": "^0.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

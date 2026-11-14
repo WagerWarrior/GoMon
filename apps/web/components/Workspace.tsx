@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AskPanel from "./AskPanel";
 import Diagram from "./Diagram";
+import GomonAvatar from "./GomonAvatar";
+import { deriveGomonState, GOMON_STATES } from "@/lib/gomon/states";
 import { buildDiagram } from "@/lib/mermaid";
 import { stageStats } from "@/lib/stats";
 import type { ActionDoc, AuditEvent, CallDoc, CallItem, Conflict, Member, Memory, TimingDoc, Utterance } from "@/lib/types";
@@ -22,6 +24,7 @@ export default function Workspace({ callId }: { callId: string }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmForget, setConfirmForget] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
 
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 250); return () => clearInterval(t); }, []);
   useEffect(() => {
@@ -45,6 +48,8 @@ export default function Workspace({ callId }: { callId: string }) {
   const diagram = useMemo(() => buildDiagram(memories, call?.title ?? "Project"), [memories, call?.title]);
   const stats = useMemo(() => stageStats(data.timings), [data.timings]);
   const role = data.members.find((m) => m.displayName === actor)?.role;
+  const face = deriveGomonState(data, now, { asking });
+  const faceInfo = GOMON_STATES[face.key];
 
   const gov = useCallback(async (op: string, extra: Record<string, unknown> = {}, okText?: string) => {
     const r = await fetch("/api/gov", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op, actor, callId, ...extra }) });
@@ -59,7 +64,7 @@ export default function Workspace({ callId }: { callId: string }) {
   return (
     <div className="shell">
       <header className="bar">
-        <div><h1>{call?.title ?? "Call"}</h1><div className="muted">{callId} · {call?.synthetic ? <b className="synthetic">SYNTHETIC DATA</b> : call?.status ?? ""}</div></div>
+        <div><span className="eyebrow">Gomon workspace</span><h1>{call?.title ?? "Call"}</h1><div className="muted">{callId} · {call?.synthetic ? <b className="synthetic">SYNTHETIC DATA</b> : call?.status ?? ""}</div></div>
         <div className="bar-r">
           <span className={`pill ${live === "offline" ? "bad" : live === "connecting" ? "" : "good"}`} title="Updates arrive from MongoDB change streams">{live === "offline" ? "Offline" : live === "connecting" ? "Connecting" : live === "polling" ? "Live (polling)" : "Live"}</span>
           <label className="who">Acting as
@@ -68,6 +73,20 @@ export default function Workspace({ callId }: { callId: string }) {
             </select></label>
         </div>
       </header>
+      <section className="presence" aria-live="polite">
+        <GomonAvatar state={face.key} size={76} />
+        <div className="presence-text">
+          <span className="eyebrow">Gomon is</span>
+          <div className="presence-state"><span className="live-dot" data-muted={faceInfo.muted ? "1" : undefined} />{face.key === "locking" ? `Locking, ${face.secondsLeft} s to veto` : faceInfo.label}</div>
+          <span className="presence-line">{faceInfo.line}</span>
+        </div>
+        <div className="presence-meta">
+          <div className="stat"><span className="eyebrow">Utterances</span><b>{data.utterances.length}</b></div>
+          <div className="stat"><span className="eyebrow">Memory</span><b>{active.length}</b></div>
+          <div className="stat"><span className="eyebrow">Actions</span><b>{data.actions.length}</b></div>
+          <div className="stat"><span className="eyebrow">Audit</span><b>{data.audit_events.length}</b></div>
+        </div>
+      </section>
       {toast && <div className={`toast ${toast.kind}`} role="status">{toast.text}</div>}
 
       <main className="grid">
@@ -120,7 +139,7 @@ export default function Workspace({ callId }: { callId: string }) {
           {data.conflicts.length === 0 ? <p className="muted">No conflicts with stored memory so far.</p> :
             <ul className="plain">{data.conflicts.map((c) => <li key={id(c)}><span className={`pill ${c.severity === "high" ? "bad" : "warn"}`}>{c.severity}</span> <b>{c.memoryKey ?? "memory"}</b> {c.note} {c.spoken ? <span className="muted">· Gomon said this aloud</span> : null}</li>)}</ul>}</section>
 
-        <AskPanel callId={callId} actor={actor} />
+        <AskPanel callId={callId} actor={actor} onBusy={setAsking} />
         <section className="card wide"><h2>Decision diagram <span className="muted small">generated from active memories</span></h2><Diagram source={diagram} /></section>
 
         <section className="card wide"><h2>Actions &amp; audit</h2>
