@@ -66,9 +66,10 @@ async function loadSessions(limit: number): Promise<SessionRow[]> {
   });
 }
 
-export async function session(callId: string) {
+export function session(callId: string) { return cached(`session:${callId}`, 1500, () => loadSession(callId), 15_000); }
+async function loadSession(callId: string) {
   const d = await db(); const q = { callId };
-  const [call, utterances, items, says, runs, timings, conflicts, actions, audit] = await Promise.all([
+  const [call, utterances, items, says, runs, timings, conflicts, actions, audit, docs] = await Promise.all([
     d.collection("calls").findOne({ _id: callId as any }),
     d.collection("utterances").find(q).sort({ seq: 1 }).limit(2000).toArray(),
     d.collection("call_items").find(q).sort({ _id: 1 }).toArray(),
@@ -78,6 +79,7 @@ export async function session(callId: string) {
     d.collection("conflicts").find(q).sort({ createdAt: 1 }).toArray(),
     d.collection("actions").find(q).sort({ createdAt: 1 }).toArray(),
     d.collection("audit_events").find(q).sort({ at: 1 }).toArray(),
+    d.collection("memories").aggregate([{ $match: { "sourceRefs.callId": callId } }, { $unwind: "$sourceRefs" }, { $match: { "sourceRefs.type": "doc" } }, { $group: { _id: "$sourceRefs.path" } }]).toArray(),
   ]);
   // Session facts from this call's own rows only (no full-table aggregations: keeps the page fast).
   const tAt = (u: any) => ms(u.startedAt ?? u.receivedAt);
@@ -89,7 +91,6 @@ export async function session(callId: string) {
   const channel = process.env.SLACK_CHANNEL_ID;
   const slackUrl = (id?: string) => { const [ch, ts] = String(id ?? "").split(":"); return ch && ts ? `https://slack.com/archives/${ch}/p${ts.replace(".", "")}` : null; };
   const memIds = [...new Set(items.map((i: any) => i.memoryId).filter(Boolean).map(String))];
-  const docs = await d.collection("memories").aggregate([{ $match: { "sourceRefs.callId": callId } }, { $unwind: "$sourceRefs" }, { $match: { "sourceRefs.type": "doc" } }, { $group: { _id: "$sourceRefs.path" } }]).toArray();
   const links = [
     ...(call?.meetingUrl ? [{ kind: "Meeting", label: "Join link", url: call.meetingUrl }] : []),
     ...(call?.slackThreadTs && channel ? [{ kind: "Slack", label: "Call thread", url: `https://slack.com/archives/${channel}/p${String(call.slackThreadTs).replace(".", "")}` }] : []),

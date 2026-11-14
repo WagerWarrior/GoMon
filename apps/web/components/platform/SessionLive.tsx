@@ -16,7 +16,7 @@ const STAGES: { key: StageKey; title: string; verbs: Verb[]; where: string }[] =
   { key: "write", title: "Write", verbs: ["APPEND"], where: "call_items" },
   { key: "lock", title: "Lock", verbs: ["LOCK", "VETO"], where: "memories · audit" },
   { key: "speak", title: "Speak", verbs: ["SPEAK"], where: "says · voice" },
-  { key: "send", title: "Send", verbs: ["SEND"], where: "Slack · GitHub" },
+  { key: "send", title: "Send", verbs: ["SEND"], where: "outbox · connected tools" },
 ];
 const stageOf = (o: Op): StageKey => (o.verb === "OPERATOR" && o.coll === "says" ? "speak" : STAGES.find((s) => s.verbs.includes(o.verb))?.key ?? "think");
 const ago = (t: string, now: number) => { const s = Math.max(0, Math.round((now - +new Date(t)) / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`; };
@@ -27,8 +27,6 @@ export default function SessionLive({ callId, initial }: { callId: string; initi
   const [now, setNow] = useState(Date.now());
   const [sel, setSel] = useState<StageKey | null>(null);
   const [all, setAll] = useState(false);
-  const [mode, setMode] = useState<"prompt" | "say">("prompt");
-  const [text, setText] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/mission?callId=${encodeURIComponent(callId)}`, { cache: "no-store" });
@@ -45,13 +43,12 @@ export default function SessionLive({ callId, initial }: { callId: string; initi
   const lockLeft = lock ? Math.ceil((+new Date(lock.lockAnnouncedAt) + lock.vetoMs - now) / 1000) : 0;
   const ops = sel ? byStage.get(sel) ?? [] : data.ops;
 
-  async function send() {
-    if (!text.trim()) return;
-    setBusy(true); setNote(null);
-    const r = await fetch("/api/mission/command", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ callId, mode, text }) });
-    const j = await r.json().catch(() => ({})); setBusy(false);
-    if (r.ok) { setText(""); setNote(mode === "say" ? "Queued. The bot speaks it." : "Sent. Watch Hear → Think."); void load(); } else setNote(j.error ?? `Failed (${r.status})`);
-  }
+  // At most three stages on screen: the last three distinct stages Gomon went through, oldest to newest.
+  const flow = useMemo(() => {
+    const seen: StageKey[] = []; const at = new Map<StageKey, Op>();
+    for (const o of data.ops) { const k = stageOf(o); if (!seen.includes(k)) { seen.push(k); at.set(k, o); } if (seen.length === 3) break; }
+    return seen.reverse().map((k) => ({ s: STAGES.find((x) => x.key === k)!, op: at.get(k)! }));
+  }, [data.ops]);
 
   return (
     <div className="sl">
@@ -60,22 +57,30 @@ export default function SessionLive({ callId, initial }: { callId: string; initi
           <h2>Visual reasoning</h2>
           <span className="sl-status"><span className={`sl-led ${live ? "on" : ""}`} />{lock && lockLeft > 0 ? `Locking · ${lockLeft}s to veto` : live ? (fresh(data.ops[0]) ? `${data.ops[0].verb.toLowerCase()} now` : "listening") : `quiet · last ${data.ops[0] ? ago(data.ops[0].at, now) : "—"} ago`}</span>
         </div>
-        <ol className="sl-stages">
-          {STAGES.map((s) => {
-            const list = byStage.get(s.key) ?? []; const last = list[0]; const on = fresh(last);
+        <div className="sl-flow">
+          {flow.map(({ s: st, op }, i) => {
+            const on = fresh(op); const latest = i === flow.length - 1;
             return (
-              <li key={s.key}>
-                <button className="sl-stage" data-on={on ? "1" : undefined} data-sel={sel === s.key ? "1" : undefined} onClick={() => setSel(sel === s.key ? null : s.key)}>
-                  <Art k={s.key} />
-                  <b>{s.title}</b>
-                  <span className="sl-where">{s.where}</span>
-                  <span className="sl-last">{last ? `${ago(last.at, now)} ago${last.ms != null ? ` · ${last.ms}ms` : ""}` : "—"}</span>
-                  <span className="sl-count">{list.length}</span>
+              <div key={st.key} className="sl-flowitem">
+                {i > 0 && <span className="sl-link" data-on={on ? "1" : undefined} aria-hidden><i /></span>}
+                <button className="sl-node" data-on={on ? "1" : undefined} data-latest={latest ? "1" : undefined} onClick={() => setSel(sel === st.key ? null : st.key)}>
+                  <Art k={st.key} />
+                  <b>{st.title}</b>
+                  <span className="sl-where">{st.where}</span>
+                  <span className="sl-optext">{op.who ? `${op.who}: ` : ""}{op.text}</span>
+                  <span className="sl-last">{ago(op.at, now)} ago{op.ms != null ? ` · ${op.ms}ms` : ""}</span>
                 </button>
-              </li>
+              </div>
             );
           })}
-        </ol>
+          {!flow.length && <div className="p-empty">Nothing yet. Stages light up as Gomon hears, searches, thinks and writes.</div>}
+        </div>
+        <div className="sl-rail" role="group" aria-label="Filter the trace by stage">
+          {STAGES.map((st) => {
+            const list = byStage.get(st.key) ?? [];
+            return <button key={st.key} aria-pressed={sel === st.key} data-on={fresh(list[0]) ? "1" : undefined} onClick={() => setSel(sel === st.key ? null : st.key)}><i />{st.title}<span>{list.length}</span></button>;
+          })}
+        </div>
       </section>
 
       <section className="sl-grid">
@@ -95,11 +100,6 @@ export default function SessionLive({ callId, initial }: { callId: string; initi
         </div>
 
         <div className="sl-side">
-          <div className="p-card">
-            <div className="p-card-h"><h2>Talk to Gomon</h2><div className="pills"><button className="chip" aria-pressed={mode === "prompt"} onClick={() => setMode("prompt")}>Prompt</button><button className="chip" aria-pressed={mode === "say"} onClick={() => setMode("say")}>Say in call</button></div></div>
-            <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send(); }} placeholder={mode === "prompt" ? "Ask or steer Gomon in this call" : "Gomon says this out loud"} />
-            <div className="btns"><button className="btn blue sm" disabled={busy || !text.trim()} onClick={send}>{busy ? "Sending" : mode === "prompt" ? "Send" : "Speak"}</button>{note && <span className="muted small">{note}</span>}</div>
-          </div>
           <div className="p-card">
             <div className="p-card-h"><h2>In Gomon's head</h2>{ctx?.lastRun && <span className="muted small">{ctx.lastRun.recalled} recalled</span>}</div>
             <span className="eyebrow">Recalled</span>

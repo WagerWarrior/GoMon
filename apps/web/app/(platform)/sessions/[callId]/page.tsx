@@ -7,17 +7,14 @@ import { activity, session, sessions } from "@/lib/platform";
 import { mission } from "@/lib/mission";
 import { workflowRuns } from "@/lib/workflows";
 import SessionLive from "@/components/platform/SessionLive";
-import { templates } from "@/lib/templates";
-import { TemplatePicker } from "@/components/platform/Templates";
+import SessionBar, { CategoryPicker } from "@/components/platform/SessionBar";
 import { clock, dur, ms, when, initials } from "@/lib/format";
 export const dynamic = "force-dynamic";
-
-const TABS = [["workspace", "Workspace"], ["live", "Live"], ["events", "Workflows & events"], ["transcript", "Transcript"], ["decisions", "Decisions"], ["timings", "Timings"], ["govern", "Govern"]] as const;
 
 export default async function SessionPage({ params, searchParams }: { params: Promise<{ callId: string }>; searchParams: Promise<{ tab?: string }> }) {
   const { callId: raw } = await params; const callId = decodeURIComponent(raw);
   const tab = (await searchParams).tab ?? "workspace";
-  const [s, tpl, list] = await Promise.all([session(callId), templates(), sessions()]);
+  const [s, list, m] = await Promise.all([session(callId), sessions(), mission(callId)]);
   const meta = list.find((x) => x.id === callId);
   if (!s.call) notFound();
   const r = s.row; const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
@@ -32,16 +29,19 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
           <h1>{s.call.title || "Design call"}</h1>
           <div className="p-people">{(meta?.team ?? r?.participants ?? []).map((p: string) => <span key={p} className="p-person"><i>{initials(p)}</i>{p}</span>)}{(meta?.guests ?? []).map((p: string) => <span key={p} className="p-person guest" title="Not a team member"><i>{initials(p)}</i>{p}<em>guest</em></span>)}</div>
         </div>
-        <div className="p-head-r"><TemplatePicker callId={callId} current={s.call.templateId ?? "design-review"} options={tpl.rows.map((t: any) => ({ id: t._id, name: t.name }))} /><span className={`pill ${meta?.state === "live" ? "good" : meta?.state === "failed" ? "bad" : ""}`}>{meta?.state ?? s.call.status}</span><span className="muted small">{when(s.call.startedAt)}</span></div>
+        <div className="p-head-r">
+          <span className={`pill ${meta?.state === "live" ? "good" : meta?.state === "failed" ? "bad" : ""}`}>{meta?.state ?? s.call.status}</span>
+          <CategoryPicker callId={callId} current={meta?.category ?? "Design review"} />
+          <dl className="sb-stats">
+            <div><dt>Length</dt><dd>{dur(r?.durationMs)}</dd></div>
+            <div><dt>Heard</dt><dd>{s.utterances.length}</dd></div>
+            <div><dt>Items</dt><dd>{s.items.length}</dd></div>
+            <div><dt>Locked</dt><dd>{s.items.filter((i: any) => i.status === "promoted").length}</dd></div>
+            <div><dt>Said</dt><dd>{s.says.length}</dd></div>
+          </dl>
+        </div>
       </header>
-      <section className="p-kpis p-kpis-5">
-        <div className="p-kpi"><span className="eyebrow">Length</span><b>{dur(r?.durationMs)}</b></div>
-        <div className="p-kpi"><span className="eyebrow">Heard</span><b>{s.utterances.length}</b></div>
-        <div className="p-kpi"><span className="eyebrow">Items</span><b>{s.items.length}</b></div>
-        <div className="p-kpi"><span className="eyebrow">Locked</span><b>{s.items.filter((i: any) => i.status === "promoted").length}</b></div>
-        <div className="p-kpi"><span className="eyebrow">Gomon said</span><b>{s.says.length}</b></div>
-      </section>
-      <nav className="p-tabs">{TABS.map(([k, l]) => <Link key={k} href={href(k)} aria-current={tab === k ? "page" : undefined}>{l}</Link>)}</nav>
+      <SessionBar callId={callId} tab={tab} initialOps={m.ops.slice(0, 30)} />
 
       {tab === "workspace" && (
         <section className="ws">
@@ -56,6 +56,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
             </ol>
             {!s.utterances.length && <div className="p-empty">Nothing heard yet.</div>}
           </div>
+          <div className="ws-right">
           <div className="ws-mid">
             <div className="p-card">
               <div className="p-card-h"><h2>Decisions</h2><span className="muted small">{s.items.filter((i: any) => i.status === "promoted").length} locked</span></div>
@@ -91,6 +92,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
               <ul className="ws-notes">{s.says.map((x: any) => <li key={x._id}><span className="eyebrow">{(x.reason ?? "say").replace(/_/g, " ")} · {rel(x.createdAt)}</span><p>{x.text}</p></li>)}</ul>
               {!s.says.length && <div className="p-empty">Gomon has not spoken.</div>}
             </div>
+          </div>
           </div>
         </section>
       )}
@@ -142,7 +144,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
 
       {tab === "events" && <Events callId={callId} runs={s.runs} says={s.says} clockRel={rel} />}
 
-      {tab === "live" && <SessionLive callId={callId} initial={await mission(callId)} />}
+      {tab === "live" && <SessionLive callId={callId} initial={m} />}
 
       {tab === "govern" && <div className="p-live-ws"><Workspace callId={callId} /></div>}
     </>
