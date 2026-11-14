@@ -79,7 +79,12 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
   }
   if (req.method === "POST" && url.pathname === "/ears/utterance") {
     const b = await json(req);
-    const callId = typeof b.callId === "string" ? b.callId : "";
+    const raw = typeof b.callId === "string" ? b.callId.trim() : "";
+    // A Meet link pasted as the call id means "the call Gomon joined for that meeting" (latest one with that meetingUrl).
+    const byUrl = /^https?:\/\//.test(raw)
+      ? await c.calls.find({ meetingUrl: raw.replace(/\?.*$/, "") }).sort({ startedAt: -1 }).limit(1).project({ _id: 1 }).next()
+      : null;
+    const callId = byUrl ? String(byUrl._id) : raw;
     const text = typeof b.text === "string" ? b.text.trim() : "";
     if (!callId || !text) { send(res, 400, { error: "callId and text required" }); return true; }
     if (await isEcho(c, callId, text)) {

@@ -75,13 +75,24 @@ async function connectScribe(channel) {
   const r = await fetch("/ears/token");
   const { token, error } = await r.json();
   if (!token) throw new Error(error ?? "no token");
-  const p = new URLSearchParams({ model_id: MODEL, token, audio_format: "pcm_16000", commit_strategy: "vad", vad_silence_threshold_secs: "0.7" });
+  // turn_prediction: commit on silence OR when the model predicts the speaker finished (people rarely pause cleanly in calls).
+  const p = new URLSearchParams({ model_id: MODEL, token, audio_format: "pcm_16000", commit_strategy: "turn_prediction", vad_silence_threshold_secs: "0.6" });
   p.append("keyterms", "Gomon");
   const ws = new WebSocket(`wss://api.elevenlabs.io/v1/speech-to-text/realtime?${p}`);
   ws.onopen = () => status(channel, "live", "live");
   ws.onmessage = async (m) => {
     const e = JSON.parse(m.data);
-    if (e.message_type === "partial_transcript") $("p-" + channel).textContent = e.text ? `${channel}: ${e.text}` : "";
+    if (e.message_type === "partial_transcript") {
+      $("p-" + channel).textContent = e.text ? `${channel}: ${e.text}` : "";
+      // Don't let a monologue become one 45 s segment: commit early when Gomon is addressed and the turn looks done, or when
+      // the segment gets long. At most one forced commit per 2 s (Scribe throttles commits).
+      const n = (e.text ?? "").split(/\s+/).filter(Boolean).length;
+      const addressed = /\bgo\s?mon\b/i.test(e.text ?? "");
+      if (n && (n >= 30 || (addressed && (e.turn_probability ?? 0) >= 0.5)) && performance.now() - (ws.lastCommit ?? 0) > 2000) {
+        ws.lastCommit = performance.now();
+        ws.send(JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: "", commit: true, sample_rate: RATE }));
+      }
+    }
     else if (e.message_type === "committed_transcript" && e.text?.trim()) {
       $("p-" + channel).textContent = "";
       const speaker = channel === "mic" ? $("me").value : $("remote").value;

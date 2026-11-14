@@ -113,11 +113,17 @@ engineer create denied and audited; lead create succeeded; a template `voiceId` 
 Free tunnels drop within minutes (Pinggy closed after 2 min 46 s mid-call), and Recall's transcript webhook needs one. The ears
 page runs on the laptop that's in the Meet: it captures the **Meet tab audio** (everyone remote, labeled with the "meeting"
 name) and the **mic** (you), resamples to 16 kHz, and streams each source to ElevenLabs Scribe realtime (`scribe_v3_live`,
-`commit_strategy=vad`, 0.7 s silence, `keyterms=Gomon` so the wake word is spelled right). Committed segments go to
-`POST /ears/utterance` (source `scribe`). Tokens come from `GET /ears/token` (single-use; the API key stays server-side).
-All `/ears` routes are loopback-only and skip `WORKER_TOKEN`. Measured: commit ~850 ms after speech ends.
+`commit_strategy=turn_prediction`, 0.6 s silence, `keyterms=Gomon` so the wake word is spelled right). The page also forces a
+commit when the live text names Gomon and the turn looks done (`turn_probability ≥ 0.5`) or passes 30 words: in the first live
+run, continuous talking produced one 45 s segment. Committed segments go to `POST /ears/utterance` (source `scribe`); the call
+id may be a Meet link, which maps to the latest call with that `meetingUrl`. Tokens come from `GET /ears/token` (single-use;
+the API key stays server-side). All `/ears` routes are loopback-only and skip `WORKER_TOKEN`. Measured: commit ~850 ms after
+speech ends. The AudioContext is created inside the Start click (created after the share prompt, Chrome kept it suspended
+and sent silence); a level meter per source shows audio is flowing.
 Echo guard: Gomon's own voice comes back through the Meet tab; a segment whose words are ≥60% contained in a line Gomon said
-in the last 30 s is dropped (`agent_events.kind = echo_dropped`). Use headphones so the mic doesn't hear the other side.
+in the last 30 s is dropped (`agent_events.kind = echo_dropped`). Duplicate guard: without headphones the mic also hears the
+meeting; a segment ≥80% matching another scribe segment from the last 4 s is dropped, and mic segments post 0.7 s late so
+the meeting copy (right speaker) wins.
 
 ## One call, one worker (`heldBy`)
 `postUtterance` inserts each utterance already held by the ingesting worker (`claimedAt` + `heldBy`). Other or older workers
