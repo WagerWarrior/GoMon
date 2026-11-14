@@ -15,6 +15,7 @@ import type { Cols } from "./db.ts";
 import { config } from "./config.ts";
 import { bargeIn, echoShare } from "./floor.ts";
 import { keyterms } from "./people.ts";
+import { notePartial } from "./hold.ts";
 import { heard, namedInPartial, speakingForMs, speakingText, stopSpeaking } from "./voice.ts";
 
 type PostUtterance = (b: Record<string, unknown>) => Promise<{ status: number; data: unknown }>;
@@ -110,6 +111,7 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
     const barge = bargeIn(text, speakingText(callId), Number(b.ms) || 0, speakingForMs(callId));
     if (barge) await stopSpeaking(c, callId, barge, text);
     if (url.pathname === "/ears/partial") {
+      notePartial(callId); // the room is still talking: a held "Hey, Gomon." keeps waiting for its question
       // The chime plays the moment the name is heard, mid-sentence, not when the sentence is finally committed (that made it
       // late on long questions and sometimes after the answer had started). Gomon's own voice coming back is not a wake.
       const speaking = speakingText(callId);

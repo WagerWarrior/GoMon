@@ -15,25 +15,37 @@ const env = {
   githubRepo: () => process.env.GITHUB_REPO || "WagerWarrior/MongoDB",
 };
 
-type GhIssue = { number: number; title: string; state: string; pull_request?: unknown; created_at: string };
+type GhIssue = { number: number; title: string; state: string; pull_request?: unknown; created_at: string; labels?: { name?: string }[]; assignees?: { login?: string }[] };
 let issueCache: { at: number; items: WorkspaceSource[] } = { at: 0, items: [] };
-const ISSUE_CACHE_MS = 60_000;
+// With a token GitHub allows 5,000 requests an hour. Without one (the repo is public) it allows 60 per address, and one
+// refresh is two requests, so the list is kept five minutes.
+const issueCacheMs = () => (env.githubToken() ? 60_000 : 300_000);
 
+/** One GitHub issue as a record line: open or closed, labels, who has it. Pure. */
+export function issueLine(i: GhIssue): WorkspaceSource {
+  const labels = (i.labels ?? []).map((l) => l.name).filter(Boolean).join(", ");
+  const who = (i.assignees ?? []).map((a) => a.login).filter(Boolean).join(", ");
+  return {
+    id: `#${i.number}`,
+    line: `${i.pull_request ? "PR" : "issue"} #${i.number} [${i.state}]${i.state === "open" && (i.labels ?? []).some((l) => l.name === "gomon") ? " filed by you from memory" : ""} ${i.title} (opened ${i.created_at.slice(0, 10)}${labels ? `; labels ${labels}` : ""}; ${who ? `assigned to ${who}` : "unassigned"})`,
+  };
+}
+
+/** The repo's issues, open ones first (up to 30 open, then the 5 most recently closed). "Outstanding tickets" reads the open ones. */
 async function githubIssues(): Promise<WorkspaceSource[]> {
-  if (!env.githubToken() || Date.now() - issueCache.at < ISSUE_CACHE_MS) return issueCache.items;
-  try {
-    const res = await fetch(`https://api.github.com/repos/${env.githubRepo()}/issues?state=all&per_page=10&sort=created&direction=desc`, {
-      headers: { authorization: `Bearer ${env.githubToken()}`, accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(1500),
+  if (Date.now() - issueCache.at < issueCacheMs()) return issueCache.items;
+  const get = async (q: string): Promise<GhIssue[] | null> => {
+    const res = await fetch(`https://api.github.com/repos/${env.githubRepo()}/issues?${q}`, {
+      headers: { ...(env.githubToken() ? { authorization: `Bearer ${env.githubToken()}` } : {}), accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(2000),
     });
-    if (res.ok) {
-      const items = ((await res.json()) as GhIssue[]).map((i) => ({
-        id: `#${i.number}`,
-        line: `${i.pull_request ? "PR" : "issue"} #${i.number} [${i.state}] ${i.title} (${i.created_at.slice(0, 10)})`,
-      }));
-      issueCache = { at: Date.now(), items };
-    }
-  } catch { /* GitHub slow or down: answer from Atlas alone */ }
+    return res.ok ? ((await res.json()) as GhIssue[]) : null;
+  };
+  try {
+    const [open, closed] = await Promise.all([get("state=open&per_page=30&sort=created&direction=desc"), get("state=closed&per_page=5&sort=updated&direction=desc")]);
+    // A failed read (rate limit, GitHub down) keeps the last list and is not retried for 30 s, so no answer waits on it twice.
+    issueCache = open ? { at: Date.now(), items: [...open, ...(closed ?? [])].map(issueLine) } : { at: Date.now() - issueCacheMs() + 30_000, items: issueCache.items };
+  } catch { issueCache = { at: Date.now() - issueCacheMs() + 30_000, items: issueCache.items }; /* answer from Atlas alone */ }
   return issueCache.items;
 }
 
@@ -103,6 +115,7 @@ async function loadWorkspace(ctx: Ctx, callId: string): Promise<Workspace> {
   return {
     header: `${platformFacts(platform)}\nCALL SO FAR, OPEN CALL ITEMS and RECENT TURNS hold what was said since you joined. GitHub repo: ${env.githubRepo()}.`,
     // Fixed facts first; then filed tickets, GitHub issues, the full memory index, past calls and recent locks.
-    sources: [...platformSources(platform), ...issues, ...calls, ...locks, stats],
+    // Closed issues go last: they are history (some carry keys from before a reset), and the budget cuts from the end.
+    sources: [...platformSources(platform), ...issues.filter((i) => !i.line.includes("[closed]")), ...calls, ...locks, stats, ...issues.filter((i) => i.line.includes("[closed]"))],
   };
 }

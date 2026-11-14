@@ -29,6 +29,7 @@ import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
 import { handleAgentApi } from "./agentapi.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
+import { releaseHeld, routeAsk } from "./hold.ts";
 import { sweepSpeakers } from "./speakers.ts";
 import { watchChatRequests } from "./chat-requests.ts";
 
@@ -200,14 +201,20 @@ async function postUtterance(b: Record<string, unknown>) {
   const woke = parseWake(text).addressed;
   const followUp = FOLLOW_UP_MS > 0 && !woke && FOLLOW_UP.test(bare)
     && !!(await c.says.findOne({ callId, reason: { $in: ["addressed", "command"] }, createdAt: { $gte: new Date(Date.now() - FOLLOW_UP_MS) } }));
-  const fast = wantsFastReply(followUp ? `Gomon, ${bare}` : text);
+  // A cut-off ask ("Hey, Gomon." / "hey Gomon, can you like-") is held; the next sentence from the same speaker is its question.
+  const route = routeAsk(callId, speakerName, text);
+  const asked = route.carried ? `${route.carried} ${text}` : text;
+  const fast = !route.hold && wantsFastReply(followUp ? `Gomon, ${bare}` : asked);
   const doc: Utterance = {
     callId, teamId: config.teamId, projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
     // Held by the ingesting worker: a stray or older worker sees it as claimed (they skip claimedAt) and never splits the call.
     claimedAt: new Date(), heldBy: WORKER_ID,
-    ...(fast ? { fastReply: true } : {}),
-    ...(followUp ? { followUp: true } : {}),
+    // A held fragment is marked like a fast-lane line, so the batch analysis does not answer it either.
+    ...(fast || route.hold ? { fastReply: true } : {}),
+    // A carried line counts as addressed in the batch analysis too ("Hey, Gomon." + "Create the tickets.").
+    ...(followUp || route.carried ? { followUp: true } : {}),
+    ...(route.hold ? { heldAsk: true } : {}),
     ...(str(b.startedAt) ? { startedAt: new Date(String(b.startedAt)) } : {}), ...(str(b.endedAt) ? { endedAt: new Date(String(b.endedAt)) } : {}),
   };
   try {
@@ -215,7 +222,17 @@ async function postUtterance(b: Record<string, unknown>) {
     // Heard its name: confirm at once (chime in the meeting, Thinking card, state line), before any model call.
     if (woke && source !== "typed") void heard(c, callId, speakerName).catch((e) => console.error("[heard]", e instanceof Error ? e.message : e));
     // Questions to Gomon are answered now, not after the queue and the full analysis.
-    if (fast) void callCtx(callId).then((cx) => fastReply(cx, { _id: r.insertedId, callId, seq, text, speaker: doc.speaker })).catch((e) => console.error("[fast]", e instanceof Error ? e.message : e));
+    const answerNow = (t: string) => void callCtx(callId).then((cx) => fastReply(cx, { _id: r.insertedId, callId, seq, text: t, speaker: doc.speaker })).catch((e) => console.error("[fast]", e instanceof Error ? e.message : e));
+    if (fast) answerNow(asked);
+    // Nothing followed the fragment: once the room has been quiet for 3 s, answer it as it stands.
+    if (route.hold) {
+      const check = () => {
+        const s = releaseHeld(callId, text, 3000);
+        if (s === "wait") setTimeout(check, 1000).unref?.();
+        else if (s === "released" && wantsFastReply(text)) answerNow(text);
+      };
+      setTimeout(check, 3000).unref?.();
+    }
     return { status: 201, data: { utteranceId: String(r.insertedId), seq, duplicate: false } };
   } catch (e) {
     if (e instanceof MongoServerError && e.code === 11000) return { status: 200, data: { duplicate: true } };

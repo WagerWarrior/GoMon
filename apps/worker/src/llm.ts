@@ -1,3 +1,4 @@
+import { agentProfile } from "./profile.ts";
 import { traceable } from "langsmith/traceable";
 import { config, modelTuning } from "./config.ts";
 import { GITHUB_OPS, ITEM_KINDS, type GithubOp, type ItemKind } from "./shapes.ts";
@@ -82,7 +83,11 @@ const SCHEMA = {
 } as const;
 
 function system(name: string, persona: string, kinds: readonly string[]): string {
-  return `You are ${name}, an AI participant in a live engineering design call. You read the newest committed utterances (one or more).
+  // Both lanes start from the same profile (profile.ts): where Gomon is, what the harness gives it, how the records are shaped.
+  return `${agentProfile(name)}
+
+THIS LANE (analysis): the same data arrives here as MEMORIES, OPEN CALL ITEMS, WORKSPACE and RECENT TURNS.
+You are ${name}, an AI participant in a live engineering design call. You read the newest committed utterances (one or more).
 You already greeted the room when you joined; never greet again. You speak ONLY when someone talks to you. The single exception
 is a serious interjection: a high-severity conflict (defined below). Everything else you notice goes to the dashboard silently.
 Persona for this call: ${persona}

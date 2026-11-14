@@ -26,6 +26,8 @@ export type Utterance = {
   fastReply?: boolean;
   /** A question right after Gomon answered (no wake word needed); handled as addressed. */
   followUp?: boolean;
+  /** A wake line held because its question was cut off (hold.ts); the next sentence carries it. */
+  heldAsk?: boolean;
 };
 
 export type CallItem = {

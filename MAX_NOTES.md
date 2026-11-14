@@ -3,6 +3,31 @@
 Owner: Max. Written for Rob's and Tamir's agents to read and reconcile against.
 Updated: 2026-11-14 (after Rob's worker landed). The spec (`spec.md`) wins on conflict.
 
+## For Rob: instruction set, answer trace, tickets without a token, key rotation (Max, 2026-11-14, evening). Pull, `npm i`, restart the worker
+1. **Keys.** The repo is public and `.env.example` carried real values until ca7d4b0. Anthropic revoked its key; the MongoDB
+   password has since been changed (the old one fails authentication). Every value that was in that file is still in git history,
+   so rotate the rest too: Voyage, ElevenLabs, Recall key and webhook secret, LangSmith, Slack bot token, Atlas API key,
+   `WORKER_TOKEN`, `SAY_TOKEN`. New values go in `.env` only.
+2. **One instruction set for both lanes** (`apps/worker/src/profile.ts`, used by `fast.ts` and `llm.ts`): always a Google Meet
+   call; its name and the ways speech-to-text spells it; what the harness searched before it answers (Atlas `$rankFusion`,
+   Voyage voyage-4); the shape of `memories`, `calls`, `utterances`, `call_items`, `actions`, `audit_events`; active assistance
+   (one note about the item asked, or one offer); never a link out loud.
+3. **Links go to the Meet chat.** Any GitHub issue an answer names is posted there once per call (three per answer at most);
+   the voice says "issue 25", never a URL or "#25" (`speech.ts`).
+4. **Answer trace in the Meet chat** (`trace.ts`): one line after each answer with the searches, hits and seconds per step.
+   `CHAT_TRACE=off` turns it off.
+5. **Tickets without `GITHUB_TOKEN`**: the issue list is read without a token when none is set (public repo, kept 5 minutes);
+   open issues first with labels and assignee, "filed by you from memory" on the ones Gomon made. Slack recaps and call notes
+   are no longer listed as tickets. Atlas counts and index names are in the fixed facts (`platform.ts`).
+6. **Slow or failed answers are said out loud**: past 4.5 s "Still working on that, one moment."; on an error "Sorry, I couldn't
+   finish that answer. Ask me again." The call's state line says "searching memory, tickets and past meetings" then "writing the answer".
+7. **Cut-off asks** (`hold.ts`): "Hey Gomon, can you tell" is held and joined with the next thing that speaker says within 10 s,
+   or answered alone after 3 s of quiet.
+8. **A cut-off answer no longer gets repeated**: interrupted answers stay in the turn history, so the next question is answered,
+   not the previous one again.
+9. Walk-through with the exact lines: `docs/demo-walkthrough.md`. Dry run: `npm run ask -- --suite` (16 questions).
+Worker `npm test` 55/55, `tsc` 0. Not heard in a real Meet from Max's machine (no Recall key there).
+
 ## For Rob: floor fixes from Max's live test, 59dbd2a (16:11). Needs a worker restart + ears/session page reload
 Max ran the demo and Gomon answered without its name. Evidence (call-202611142054-291b, `says` joined to their utterance):
 "How can we resolve the EU residency question?", "What do you think we should do?" and "Thank you. How is it like?" got

@@ -22,9 +22,14 @@ const SUITE = [
   "Hey Gomon, who owns the billing pipeline?",
   "Hey Gomon, what's the latest decision we made?",
   "Hey Gomon, what's the weather in Paris?",
+  "Hey Gomon, which issues are open and who has them?",
+  "Hey Gomon, what constraints do we have for adding an EU cluster?",
+  "Hey Gomon, what's in our Atlas database right now?",
+  "Hey Gomon, what ADRs do we have on data residency?",
+  "Hey Gomon, how do you find things in memory?",
 ];
 const { client, db } = await connect(); const c = cols(db);
-const call = cid ? await c.calls.findOne({ _id: cid as never }) : await c.calls.find({ teamId: config.teamId, status: "live" }).sort({ startedAt: -1 }).limit(1).next();
+const call = cid ? await c.calls.findOne({ _id: cid as never }) : await c.calls.find({ teamId: config.teamId }).sort({ startedAt: -1 }).limit(1).next();
 if (!call) throw new Error("no call");
 const ctx = { client, c, teamId: config.teamId, projectId: String(call.projectId ?? config.projectId) };
 console.log(`call ${call._id} "${call.title}" (${ctx.projectId}), model ${config.analyzeModel}\n`);
