@@ -67,8 +67,10 @@ Rules:
 - conflicts: for each new item ("new:<index>") or open item (its id) that contradicts a memory, give memoryId and a note (max 25
   words, spoken aloud) naming the memory key and the specific clash. kind "already_decided" when the team re-debates something a
   memory already settles. severity "high" only for direct contradictions of a decision or customer requirement.
-- agreement: when a new utterance expresses team agreement with proposed item(s) ("let's do that", "agreed", "sounds good, ship it"),
-  itemRefs = those items ("new:<index>" or ids; usually the latest proposal) and agreedBy = speakers who agreed. Otherwise [] and [].
+- agreement: when a new utterance clearly expresses team agreement with proposed item(s) ("agreed", "let's do that", "sounds good,
+  ship it", "yes let's go with that"), itemRefs = those items ("new:<index>" or ids; usually the latest proposal) and agreedBy =
+  speakers who agreed (not the proposer alone). A bare "yeah", "mm", "right" or "okay" that the SAME speaker continues past is
+  filler, not agreement. Never agree on behalf of silence. Otherwise [] and [].
 - objection: true if the speaker pushes back on something being locked ("wait", "no", "hold on", "not yet").
 - command: only when the speaker explicitly asks you: "lock it in" -> lock_item (itemRef); "create the tickets" -> create_tickets;
   "post it to Slack" -> post_slack; "correct that, X is Y" -> correct_memory (memoryId of the memory being corrected, newText = the

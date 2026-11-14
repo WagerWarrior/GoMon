@@ -8,6 +8,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { MongoServerError, type ObjectId, type ResumeToken } from "mongodb";
 import { config } from "./config.ts";
 import { cols, connect } from "./db.ts";
@@ -15,14 +16,24 @@ import { handleBatch, sweepLocks, type Stored } from "./agent.ts";
 import { checkPolicy, type Ctx } from "./governance.ts";
 import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
 import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
+import { parseWake } from "./wake.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
 const ctx: Ctx = { client, c, teamId: config.teamId, projectId: config.projectId };
 const STREAM_ID = `worker-utterances:${config.teamId}:${config.projectId}`;
+/** Identifies this process on claimed utterances, so a second worker on the same database is visible. */
+const WORKER_ID = `${hostname()}:${process.pid}`;
 
 // ---------- processing: one batch at a time per call; everything that arrived meanwhile is the next batch ----------
 const MAX_BATCH = 8;
+const MERGE_QUIET_MS = Number(process.env.MERGE_QUIET_MS || 1200);
+const MERGE_MAX_MS = Number(process.env.MERGE_MAX_MS || 3500);
+function sleep(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+}
 const running = new Set<string>();
 const again = new Set<string>();
 
@@ -37,13 +48,27 @@ function schedule(callId: string): void {
   })();
 }
 
-/** Claim this call's unprocessed utterances (atomically, by token) and handle them as one batch. Returns false when none. */
+/**
+ * Claim this call's unprocessed utterances (atomically, by token) and handle them as one batch. Returns false when none.
+ * Recall splits speech into tiny segments ("yeah", "ness"), so unless someone addressed Gomon we wait for a short quiet gap
+ * (MERGE_QUIET_MS since the newest segment, at most MERGE_MAX_MS since the oldest) and analyze the merged run once.
+ */
 async function processPending(callId: string): Promise<boolean> {
-  const ids = (await c.utterances.find({ callId, processedAt: { $exists: false }, claimedAt: { $exists: false } }, { projection: { _id: 1 } })
-    .sort({ seq: 1 }).limit(MAX_BATCH).toArray()).map((d) => d._id);
+  const pendingFilter = { callId, processedAt: { $exists: false }, claimedAt: { $exists: false } };
+  for (;;) {
+    const pending = await c.utterances.find(pendingFilter, { projection: { text: 1, receivedAt: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray();
+    if (!pending.length) return false;
+    if (pending.length >= MAX_BATCH || pending.some((p) => parseWake(p.text).addressed)) break;
+    const now = Date.now();
+    const quietFor = now - pending[pending.length - 1].receivedAt.getTime();
+    const waited = now - pending[0].receivedAt.getTime();
+    if (quietFor >= MERGE_QUIET_MS || waited >= MERGE_MAX_MS) break;
+    await sleep(Math.min(MERGE_QUIET_MS - quietFor, MERGE_MAX_MS - waited) + 20);
+  }
+  const ids = (await c.utterances.find(pendingFilter, { projection: { _id: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray()).map((d) => d._id);
   if (!ids.length) return false;
   const claimToken = randomUUID();
-  await c.utterances.updateMany({ _id: { $in: ids }, processedAt: { $exists: false }, claimedAt: { $exists: false } }, { $set: { claimedAt: new Date(), claimToken } });
+  await c.utterances.updateMany({ _id: { $in: ids }, processedAt: { $exists: false }, claimedAt: { $exists: false } }, { $set: { claimedAt: new Date(), claimToken, claimedBy: WORKER_ID } });
   const batch = (await c.utterances.find({ claimToken }).sort({ seq: 1 }).toArray()) as Stored[];
   if (!batch.length) return true;
   try {

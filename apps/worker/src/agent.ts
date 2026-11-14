@@ -5,13 +5,17 @@ import { config } from "./config.ts";
 import { correctMemory, enqueueForCall, forgetMemory, oid, PolicyDenied, promoteItem, vetoLocks, type Ctx } from "./governance.ts";
 import { analyze, type Analysis } from "./llm.ts";
 import { retrieve, type Retrieved } from "./retrieve.ts";
-import type { CallItem, Say, Utterance } from "./shapes.ts";
+import type { CallItem, ItemKind, Say, Utterance } from "./shapes.ts";
 import { parseWake } from "./wake.ts";
 import { SPEAKING, templateFor } from "./templates.ts";
 
 export type Stored = Utterance & { _id: ObjectId };
 
 const RECENT_TURNS = 8;
+/** Exact text the bot page pre-caches (SAY_PRECACHE="On it."); change only together with apps/bot-page. */
+export const ACK_TEXT = "On it.";
+/** Kinds that consensus may promote to canonical memory. Alternatives, risks, questions and actions stay as call items. */
+const LOCKABLE_KINDS: ItemKind[] = ["decision", "requirement", "constraint", "interface"];
 
 async function timing(ctx: Ctx, callId: string, stage: string, ms: number, utteranceId?: ObjectId) {
   await ctx.c.timings.insertOne({ callId, teamId: ctx.teamId, projectId: ctx.projectId, stage, ms: Math.round(ms), at: new Date(), utteranceId });
@@ -68,6 +72,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   // Sound-alike wake detection (ASR never spells "Gomon"); the addressed utterance's speaker is the command actor.
   const wakes = batch.map((b) => ({ b, w: parseWake(b.text) })).filter((x) => x.w.addressed);
   const speaker = (wakes[wakes.length - 1]?.b ?? u).speaker.displayName;
+  // Instant acknowledgment: the bot page starts audio ~0.35 s after a say and pre-caches this exact text (SAY_PRECACHE).
+  if (wakes.length) await say(ctx, u.callId, ACK_TEXT, "ack", "normal", u._id);
 
   const tR = Date.now();
   const query = batch.map((b) => b.text).join(" ").slice(-600);
@@ -125,19 +131,28 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     if (vetoed.length) await say(ctx, u.callId, "Okay, holding off on that.", "lock_vetoed", "high", u._id);
   }
 
-  // 4. Consensus: announce, then the sweeper promotes after the veto window unless someone objects.
+  // 4. Consensus: announce, then the sweeper promotes after the veto window unless someone objects. Safety gates: only
+  //    lockable kinds, and never an item with an open high-severity conflict (that needs an explicit "lock it in").
   const agreedIds = a.agreement.itemRefs.map((r) => resolveRef(r, created, open)).filter((x): x is ObjectId => x !== null);
   if (agreedIds.length && !a.objection && tpl.consensus === "announce_veto") {
     const announced: string[] = [];
+    const held: string[] = [];
     for (const id of agreedIds) {
+      if (await ctx.c.conflicts.findOne({ callId: u.callId, itemId: id, severity: "high" })) {
+        const it = await ctx.c.callItems.findOne({ _id: id });
+        if (it) held.push(it.text);
+        continue;
+      }
       const it = await ctx.c.callItems.findOneAndUpdate(
-        { _id: id, status: "proposed" },
+        { _id: id, status: "proposed", kind: { $in: LOCKABLE_KINDS } },
         { $set: { status: "locking", lockAnnouncedAt: new Date(), vetoMs: tpl.vetoMs, agreedBy: [...new Set([...a.agreement.agreedBy, speaker])], updatedAt: new Date() } },
         { returnDocument: "after" },
       );
       if (it) announced.push(it.text);
     }
     if (announced.length) await say(ctx, u.callId, `Locking in: ${announced.map((t) => t.replace(/[.\s]+$/, "")).join("; ")}. Say wait to stop me.`, "lock_announce", "high", u._id);
+    else if (held.length) await say(ctx, u.callId, "That one conflicts with team memory, so I won't lock it on agreement alone. Say lock it in if you mean it.", "command", "normal", u._id);
+    if (held.length) await ctx.c.auditEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), type: "lock_held", actor: speaker, reason: "agreement on an item with a high-severity conflict", ref: { items: held } });
   }
 
   // 5. Explicit commands. Policy is checked inside governance; denials are audited and spoken.

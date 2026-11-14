@@ -19,7 +19,7 @@ export type Utterance = {
   text: string;
   source: "recall" | "scribe" | "typed";
   startedAt?: Date; endedAt?: Date; receivedAt: Date;
-  claimedAt?: Date; claimToken?: string; processedAt?: Date; error?: string;
+  claimedAt?: Date; claimToken?: string; claimedBy?: string; processedAt?: Date; error?: string;
 };
 
 export type CallItem = {
@@ -70,7 +70,7 @@ export type Say = {
   callId: string; teamId: string; projectId: string;
   text: string;
   priority: "high" | "normal";
-  reason: "addressed" | "conflict" | "already_decided" | "lock_announce" | "lock_vetoed" | "lock_done" | "suggestion" | "command";
+  reason: "ack" | "addressed" | "conflict" | "already_decided" | "lock_announce" | "lock_vetoed" | "lock_done" | "suggestion" | "command";
   status: "queued" | "started" | "done" | "failed" | "cancelled";
   createdAt: Date; updatedAt: Date;
   utteranceId?: ObjectId;
