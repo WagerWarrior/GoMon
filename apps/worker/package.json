@@ -1,0 +1,25 @@
+{
+  "name": "@gomon/worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Gomon agent worker (Rob): Atlas schema, seed, hybrid retrieval, utterance loop, consensus locks, memory governance",
+  "scripts": {
+    "setup": "node --env-file=../../.env --import tsx scripts/setup.ts",
+    "seed": "node --env-file=../../.env --import tsx scripts/seed.ts",
+    "start": "node --env-file=../../.env --import tsx src/main.ts",
+    "say": "node --env-file=../../.env --import tsx scripts/utter.ts",
+    "verify": "node --env-file=../../.env --import tsx scripts/verify.ts",
+    "typecheck": "tsc --noEmit",
+    "inspect": "node --env-file=../../.env --import tsx scripts/inspect.ts"
+  },
+  "dependencies": {
+    "langsmith": "^0.12.0",
+    "mongodb": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
