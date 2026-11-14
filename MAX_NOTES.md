@@ -32,7 +32,14 @@ Max ran the demo and Gomon answered without its name. Evidence (call-20261114205
    allowed source (it was passed but the rules said "only TEAM MEMORY and WORKSPACE"). Each answer writes
    `agent_events.kind: "context_window"` with per-section tokens, lines cut and the API's real `usage`. The full
    analysis lane (`llm.ts`) is unchanged.
-Verified: worker typecheck 0, `npm test` 27/27 (`test/floor.test.ts`, `test/people.test.ts`, `test/window.test.ts`), web typecheck 0. **Not verified live**: I did not
+8. **Real speaker names, after the call** (`speakers.ts`, sweep in `main.ts` every 20 s): for calls ended in the last
+   30 min, each spoken line is matched against Recall's speaker timeline (who held the floor while it was said) and
+   `speaker.displayName` becomes the real participant; the old label stays as `speaker.heardAs`, audit `speakers_relabeled`.
+   Live it is not possible without a public URL: a live bot's `speaker_timeline_download_url` is null and the legacy
+   polling endpoints answer 400 (probed on your bots, read-only). Live names = set `PUBLIC_BASE_URL` (the realtime
+   transcript mode in `recall.ts`). Not proven on real data: the only finished call with lines (call-202611142119-4727)
+   has an empty timeline (nobody unmuted in the Meet?), so the dry run renamed 0 of 32. People must be unmuted in Meet.
+Verified: worker typecheck 0, `npm test` 31/31 (`test/floor.test.ts`, `test/people.test.ts`, `test/window.test.ts`), web typecheck 0. **Not verified live**: I did not
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 

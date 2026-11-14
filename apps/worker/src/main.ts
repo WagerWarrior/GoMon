@@ -28,6 +28,7 @@ import { COMPANY_PROJECT } from "./scope.ts";
 import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
+import { sweepSpeakers } from "./speakers.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -518,6 +519,8 @@ server.listen(config.port, () => console.log(`[http] gomon worker on :${config.p
 if (process.env.VOICE_OUT === "recall") startRecallVoice(c, console.log);
 setInterval(() => { sweepAllLocks().catch((e) => console.error("[locks]", e)); }, 1000);
 setInterval(() => { catchUp().catch((e) => console.error("[catchup]", e)); }, 15_000);
+// After a call ends, its lines are renamed to the people Recall heard (speakers.ts); live, the listener knows only "you" / "others".
+setInterval(() => { sweepSpeakers(c).catch((e) => console.error("[speakers]", e instanceof Error ? e.message : e)); }, 20_000);
 watchEndRequests();
 await catchUp();
 await watchUtterances();
