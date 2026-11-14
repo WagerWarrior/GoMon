@@ -11,6 +11,7 @@ import { SPEAKING, templateFor } from "./templates.ts";
 import { postToMeetingChat, resolveLink } from "./links.ts";
 import { workspaceFor, type Workspace } from "./context.ts";
 import { maybeRefreshSummary } from "./summary.ts";
+import { showCard } from "./card.ts";
 import { memoryFilter } from "./scope.ts";
 import { handleGithubIntent } from "./github-intent.ts";
 
@@ -31,6 +32,9 @@ const shortDate = (d: unknown) => (d instanceof Date ? d.toLocaleDateString("en-
 /** Live agent state on the call document (listening | thinking | searching | answering), for the bot tile and the workspace. */
 async function setState(ctx: Ctx, callId: string, state: "listening" | "thinking" | "searching" | "answering", detail: string): Promise<void> {
   await ctx.c.calls.updateOne({ _id: callId as never }, { $set: { agentState: { state, detail, at: new Date() } } });
+  // Camera card: only questions to Gomon show Thinking (background capture batches would make it flicker).
+  if (state === "searching") void showCard(ctx.c, callId, "thinking");
+  else if (state === "listening") void showCard(ctx.c, callId, "listening");
 }
 /** Kinds that consensus may promote to canonical memory. Alternatives, risks, questions and actions stay as call items. */
 const LOCKABLE_KINDS: ItemKind[] = ["decision", "requirement", "constraint", "interface"];
@@ -105,7 +109,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   ]);
 
   // Sound-alike wake detection (ASR never spells "Gomon"); the addressed utterance's speaker is the command actor.
-  const wakes = batch.map((b) => ({ b, w: parseWake(b.text) })).filter((x) => x.w.addressed);
+  // Follow-ups (marked at ingest: a question right after Gomon answered) count as addressed, like a spoken wake word.
+  const wakes = batch.map((b) => ({ b, w: b.followUp ? { addressed: true, rest: b.text, heardAs: "follow-up" } : parseWake(b.text) })).filter((x) => x.w.addressed);
   const speaker = (wakes[wakes.length - 1]?.b ?? u).speaker.displayName;
   // The fast lane (fast.ts) already answered questions addressed to Gomon; the batch then only records items and conflicts.
   const fastAnswered = wakes.length > 0 && wakes.every((x) => x.b.fastReply === true);
@@ -224,7 +229,10 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       );
       if (it) announced.push(it.text);
     }
-    if (announced.length) await notify(ctx, u.callId, `locking in "${announced.map((t) => t.replace(/[.\s]+$/, "")).join("; ")}" in ${Math.round(tpl.vetoMs / 1000)} s. Say "wait" to stop it.`, "lock_announce", u._id);
+    if (announced.length) {
+      void showCard(ctx.c, u.callId, "locking");
+      await notify(ctx, u.callId, `locking in "${announced.map((t) => t.replace(/[.\s]+$/, "")).join("; ")}" in ${Math.round(tpl.vetoMs / 1000)} s. Say "wait" to stop it.`, "lock_announce", u._id);
+    }
     else if (held.length) await notify(ctx, u.callId, `not locking "${held.join("; ")}" on agreement alone: it conflicts with team memory. Say "lock it in" if you mean it.`, "command", u._id);
     if (held.length) await ctx.c.auditEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), type: "lock_held", actor: speaker, reason: "agreement on an item with a high-severity conflict", ref: { items: held } });
   }
@@ -339,7 +347,10 @@ export async function sweepLocks(ctx: Ctx): Promise<void> {
     const voiced: Ctx = { ...scoped, voiceId: (await templateFor(ctx.c, ctx.teamId, call?.templateId)).voiceId };
     try {
       const mem = await promoteItem(scoped, it._id, actor, "consensus");
-      if (mem) await notify(voiced, it.callId, `locked ${mem.key}: ${it.text}`, "lock_done");
+      if (mem) {
+        await notify(voiced, it.callId, `locked ${mem.key}: ${it.text}`, "lock_done");
+        void showCard(ctx.c, it.callId, "listening");
+      }
     } catch (e) {
       if (!(e instanceof PolicyDenied)) throw e;
       await ctx.c.callItems.updateOne({ _id: it._id, status: "locking" }, { $set: { status: "proposed", updatedAt: new Date() }, $unset: { lockAnnouncedAt: "" } });

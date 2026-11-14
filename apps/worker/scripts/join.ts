@@ -12,6 +12,7 @@ import { config } from "../src/config.ts";
 import { close, cols, connect } from "../src/db.ts";
 import { DEFAULT_TEMPLATE_ID } from "../src/templates.ts";
 import { ttsMp3 } from "../src/voice.ts";
+import { cardB64 } from "../src/card.ts";
 
 // projectId scopes what Gomon can read in this call (that project's memory + company context), e.g. enterprise-sso.
 const [meetingUrl, callIdArg, titleArg, projectArg] = process.argv.slice(2);
@@ -43,6 +44,8 @@ const res = await fetch(`https://${RECALL_REGION}.recall.ai/api/v1/bot/`, {
     metadata: { callId },
     recording_config: recordingConfig,
     automatic_audio_output: { in_call_recording: { data: { kind: "mp3", b64_data: greeting.toString("base64") } } },
+    // Gomon's camera tile: the Listening card; the worker switches it (thinking / speaking / locking) via Output Video.
+    automatic_video_output: { in_call_recording: { kind: "jpeg", b64_data: cardB64("listening") }, in_call_not_recording: { kind: "jpeg", b64_data: cardB64("listening") } },
   }),
 });
 const text = await res.text();

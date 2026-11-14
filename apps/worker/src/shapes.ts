@@ -24,6 +24,8 @@ export type Utterance = {
   heldBy?: string;
   /** Answered by the fast reply lane at ingest (fast.ts); the batch skips its own reply and ack. */
   fastReply?: boolean;
+  /** A question right after Gomon answered (no wake word needed); handled as addressed. */
+  followUp?: boolean;
 };
 
 export type CallItem = {

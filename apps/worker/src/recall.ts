@@ -1,15 +1,33 @@
 /**
- * Recall.ai bot dispatch for POST /api/meetings. The request is the one apps/bot-page/scripts/create-bot.js sends (fields
- * verified against docs.recall.ai): transcripts stream to the bot page's webhook for this callId, and the bot page itself
- * is the bot's camera, so it can speak Gomon's lines.
+ * Recall.ai bot dispatch for POST /api/meetings (and `npm run join`). Two modes:
+ *  - no PUBLIC_BASE_URL (default, no tunnel): the bot only speaks (Output Audio) and shows Gomon's state card (Output Video);
+ *    ears are the local Scribe page (http://localhost:3001/ears), which finds the live call by itself.
+ *  - PUBLIC_BASE_URL set: transcripts stream to the bot page's webhook and the bot page is the bot's camera (needs a tunnel
+ *    without a browser warning page).
  */
 import { config } from "./config.ts";
+import { cardB64 } from "./card.ts";
+import { ttsMp3 } from "./voice.ts";
 
 export type RecallConfig = typeof config.recall;
+export type BotMedia = { greetingMp3B64: string; cardJpegB64: string };
+
+export const GREETING = "Hey, Gomon here. I'll keep track of decisions. Say hey Gomon if you need me.";
 
 /** Create Bot body. Pure, so it can be inspected without dispatching a bot. */
-export function botRequestBody(meetingUrl: string, callId: string, rc: RecallConfig = config.recall): Record<string, unknown> {
-  if (!/^https:\/\//.test(rc.publicBaseUrl)) throw new Error("PUBLIC_BASE_URL must be the bot page's public https URL (tunnel)");
+export function botRequestBody(meetingUrl: string, callId: string, rc: RecallConfig = config.recall, media?: BotMedia): Record<string, unknown> {
+  if (!/^https:\/\//.test(rc.publicBaseUrl)) {
+    if (!media) throw new Error("no PUBLIC_BASE_URL: pass the greeting and card (no-tunnel mode)");
+    const card = { kind: "jpeg", b64_data: media.cardJpegB64 };
+    return {
+      meeting_url: meetingUrl,
+      bot_name: "Gomon",
+      metadata: { callId },
+      // Output Audio needs automatic_audio_output configured; the greeting doubles as it.
+      automatic_audio_output: { in_call_recording: { data: { kind: "mp3", b64_data: media.greetingMp3B64 } } },
+      automatic_video_output: { in_call_recording: card, in_call_not_recording: card },
+    };
+  }
   const base = rc.publicBaseUrl.replace(/\/$/, "");
   // Recall requires a "/" before the query string, otherwise deliveries fail with HTTP 400.
   const webhook = new URL(`${base}/recall/webhook/`);
@@ -45,7 +63,10 @@ async function recall(path: string, init: { method: "POST"; body?: unknown }, rc
 
 /** Send a Gomon bot into the meeting; returns Recall's bot id. */
 export async function createBot(meetingUrl: string, callId: string, rc: RecallConfig = config.recall): Promise<string> {
-  const bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, rc) }, rc);
+  const media = /^https:\/\//.test(rc.publicBaseUrl)
+    ? undefined
+    : { greetingMp3B64: (await ttsMp3(GREETING)).toString("base64"), cardJpegB64: cardB64("listening") };
+  const bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, rc, media) }, rc);
   if (typeof bot.id !== "string") throw new Error("Recall returned no bot id");
   return bot.id;
 }

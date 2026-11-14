@@ -63,7 +63,7 @@ async function json(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 /** Returns true when the request was an /ears route (handled or rejected). */
-export async function handleEars(req: IncomingMessage, res: ServerResponse, url: URL, c: Cols, postUtterance: PostUtterance): Promise<boolean> {
+export async function handleEars(req: IncomingMessage, res: ServerResponse, url: URL, c: Cols, postUtterance: PostUtterance, startMeeting: PostUtterance): Promise<boolean> {
   if (url.pathname !== "/ears" && !url.pathname.startsWith("/ears/")) return false;
   if (!LOOPBACK.has(req.socket.remoteAddress ?? "")) { send(res, 403, { error: "ears is local-only" }); return true; }
   if (req.method === "GET" && url.pathname === "/ears") {
@@ -75,6 +75,18 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
     const r = await fetch("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe", { method: "POST", headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "" } });
     const body = (await r.json()) as { token?: string; detail?: unknown };
     send(res, r.ok && body.token ? 200 : 502, r.ok && body.token ? { token: body.token } : { error: "token failed", detail: body.detail });
+    return true;
+  }
+  // The call to listen for: the latest live call that has a Gomon bot (so nobody types a call id).
+  if (req.method === "GET" && url.pathname === "/ears/active") {
+    const call = await c.calls.find({ teamId: config.teamId, status: "live", botId: { $type: "string" } }).sort({ startedAt: -1 }).limit(1).project({ title: 1, projectId: 1, meetingUrl: 1 }).next();
+    send(res, call ? 200 : 404, call ? { callId: String(call._id), title: call.title, projectId: call.projectId, meetingUrl: call.meetingUrl } : { error: "no live call with Gomon" });
+    return true;
+  }
+  // One step: paste the Meet link here, Gomon joins (same policy-checked path as the dashboard's Start meeting).
+  if (req.method === "POST" && url.pathname === "/ears/join") {
+    const r = await startMeeting(await json(req));
+    send(res, r.status, r.data);
     return true;
   }
   if (req.method === "POST" && url.pathname === "/ears/utterance") {

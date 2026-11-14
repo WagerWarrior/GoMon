@@ -41,7 +41,9 @@ export async function resolveLink(ctx: Ctx, callId: string, memory: Retrieved | 
     }
   }
   const recent = pick(await ctx.c.actions.find<ActionDoc>({ teamId: ctx.teamId, callId, externalUrl: { $type: "string" } }).sort({ _id: -1 }).limit(20).toArray());
-  return recent?.externalUrl ? { url: recent.externalUrl, label: recent.payload?.title ?? "Latest from this call", source: "action" } : null;
+  if (recent?.externalUrl) return { url: recent.externalUrl, label: recent.payload?.title ?? "Latest from this call", source: "action" };
+  // Nothing specific: the repo's open issues are still a useful link to drop.
+  return { url: `https://github.com/${env.githubRepo()}/issues`, label: "Open GitHub issues", source: "repo" };
 }
 
 /** Post to the meeting chat via the call's Recall bot (Meet limit: 500 chars). Returns whether Recall accepted it. */

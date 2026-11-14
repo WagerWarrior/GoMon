@@ -22,7 +22,10 @@
 Scribe and sends each sentence to the local Gomon worker. Use headphones so your mic doesn't hear the other side.</p>
 
 <fieldset>
-  <label>Call ID <input type="text" id="callId"></label>
+  <label>Meet link <input type="text" id="meetUrl" placeholder="https://meet.google.com/..."> project
+    <select id="project"><option>enterprise-sso</option><option>public-api-launch</option></select>
+    <button id="join" type="button">Send Gomon</button></label>
+  <label>Call <input type="text" id="callId" placeholder="found automatically"> <span id="callInfo" class="muted"></span></label>
   <label><input type="checkbox" id="useMic" checked> My mic, speaking as <input type="text" id="me"></label>
   <label><input type="checkbox" id="useTab" checked> Meeting tab audio, speaking as <input type="text" id="remote"></label>
   <p class="muted">Start asks you to share a tab: pick the Google Meet tab and keep "Also share tab audio" on.</p>
@@ -39,6 +42,25 @@ const q = new URLSearchParams(location.search);
 $("callId").value = q.get("callId") ?? "";
 $("me").value = q.get("me") ?? "Robert Reder";
 $("remote").value = q.get("remote") ?? "Max Naidenov";
+// No call id typed: use the live call Gomon is in.
+async function findActive() {
+  const r = await fetch("/ears/active");
+  if (!r.ok) { $("callInfo").textContent = "no live call yet: paste the Meet link and Send Gomon"; return; }
+  const a = await r.json();
+  $("callId").value = a.callId;
+  $("callInfo").textContent = `${a.title ?? ""} (${a.projectId ?? ""})`;
+}
+if (!$("callId").value) void findActive();
+$("join").onclick = async () => {
+  const meetingUrl = $("meetUrl").value.trim();
+  if (!meetingUrl) return alert("Paste the Google Meet link first.");
+  $("callInfo").textContent = "sending Gomon…";
+  const r = await fetch("/ears/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ meetingUrl, projectId: $("project").value, title: "Design call", actor: $("me").value }) });
+  const out = await r.json();
+  if (!r.ok) { $("callInfo").textContent = `failed: ${out.error ?? r.status}`; return; }
+  $("callId").value = out.callId;
+  $("callInfo").textContent = `Gomon is joining: admit it in the Meet, then Start listening (${out.projectId})`;
+};
 
 const RATE = 16000;
 const MODEL = q.get("model") ?? "scribe_v3_live";

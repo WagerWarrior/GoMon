@@ -44,6 +44,9 @@ const WORKER_ID = `${hostname()}:${process.pid}`;
 const MAX_BATCH = 8;
 const MERGE_QUIET_MS = Number(process.env.MERGE_QUIET_MS || 1200);
 const MERGE_MAX_MS = Number(process.env.MERGE_MAX_MS || 3500);
+/** After Gomon answers, questions/requests within this window are treated as addressed even without the name. */
+const FOLLOW_UP_MS = 20_000;
+const FOLLOW_UP = /\?\s*$|^(what|why|how|when|where|who|which|can|could|would|will|is|are|do|does|did|should|tell|show|give|post|drop|send|share|create|file|lock|and what|what about)\b/i;
 function sleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   setTimeout(resolve, ms);
@@ -186,13 +189,18 @@ async function postUtterance(b: Record<string, unknown>) {
   // Recall sourceKeys are recall:<botId>:<participantId>:<start>; the bot id lets Gomon post to the meeting chat.
   const botId = /^recall:([^:]+):/.exec(sourceKey)?.[1];
   const { seq, projectId } = await ensureCall(callId, { speaker: speakerName, botId });
-  const fast = wantsFastReply(text);
+  // Follow-up window: right after Gomon answered, a question or request without the name is still addressed to it.
+  const bare = text.replace(/^(\s*(um+|uh+|so|okay|ok|yeah|and|but|hmm+|right)[,.]?\s+)+/i, "");
+  const followUp = !parseWake(text).addressed && FOLLOW_UP.test(bare)
+    && !!(await c.says.findOne({ callId, reason: { $in: ["addressed", "command"] }, createdAt: { $gte: new Date(Date.now() - FOLLOW_UP_MS) } }));
+  const fast = wantsFastReply(followUp ? `Gomon, ${bare}` : text);
   const doc: Utterance = {
     callId, teamId: config.teamId, projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
     // Held by the ingesting worker: a stray or older worker sees it as claimed (they skip claimedAt) and never splits the call.
     claimedAt: new Date(), heldBy: WORKER_ID,
     ...(fast ? { fastReply: true } : {}),
+    ...(followUp ? { followUp: true } : {}),
     ...(str(b.startedAt) ? { startedAt: new Date(String(b.startedAt)) } : {}), ...(str(b.endedAt) ? { endedAt: new Date(String(b.endedAt)) } : {}),
   };
   try {
@@ -251,7 +259,8 @@ type Reply = { status: number; data: unknown };
 async function startMeeting(b: Record<string, unknown>, me: PublicUser | null): Promise<Reply> {
   const meetingUrl = str(b.meetingUrl);
   if (!meetingUrl || !/^https:\/\//.test(meetingUrl)) return { status: 400, data: { error: "meetingUrl (https) required" } };
-  if (!config.recall.apiKey || !config.recall.publicBaseUrl) return { status: 503, data: { error: "Recall is not configured: set RECALL_API_KEY and PUBLIC_BASE_URL" } };
+  // No PUBLIC_BASE_URL is fine: the bot speaks and shows its card, and the local ears page transcribes (recall.ts).
+  if (!config.recall.apiKey) return { status: 503, data: { error: "Recall is not configured: set RECALL_API_KEY" } };
   const actor = await requester(me, b);
   if (!actor) return { status: 400, data: { error: "actor required (or sign in)" } };
   const projectId = str(b.projectId) ?? config.projectId;
@@ -365,7 +374,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "OPTIONS") return void res.writeHead(204).end();
   const url = new URL(req.url ?? "/", "http://localhost");
   // Local capture page (ElevenLabs Scribe): loopback-only, so it runs before the WORKER_TOKEN check.
-  if (await handleEars(req, res, url, c, postUtterance).catch((e) => { console.error("[ears]", e); send(res, 500, { error: "ears failed" }); return true; })) return;
+  if (await handleEars(req, res, url, c, postUtterance, (b) => startMeeting(b, null)).catch((e) => { console.error("[ears]", e); send(res, 500, { error: "ears failed" }); return true; })) return;
   if (config.workerToken) {
     const token = req.headers.authorization?.replace(/^Bearer /, "") ?? url.searchParams.get("token");
     if (token !== config.workerToken && url.pathname !== "/healthz") return send(res, 401, { error: "unauthorized" });

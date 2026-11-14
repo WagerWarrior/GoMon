@@ -11,6 +11,7 @@ import { retrieve } from "./retrieve.ts";
 import { workspaceFor } from "./context.ts";
 import { searchKnowledge } from "./knowledge.ts";
 import { parseWake } from "./wake.ts";
+import { showCard } from "./card.ts";
 import { say } from "./agent.ts";
 import { templateFor } from "./templates.ts";
 
@@ -28,6 +29,7 @@ export function wantsFastReply(text: string): boolean {
 
 export async function fastReply(ctx: Ctx, u: { _id: ObjectId; callId: string; seq: number; text: string; speaker: { displayName: string } }): Promise<void> {
   const t0 = Date.now();
+  void showCard(ctx.c, u.callId, "thinking");
   const call = await ctx.c.calls.findOne({ _id: u.callId as never }, { projection: { summary: 1, templateId: 1, memoryEnabled: 1 } });
   const [recent, said, memories, workspace, tpl, knowledge] = await Promise.all([
     ctx.c.utterances.find({ callId: u.callId, seq: { $lt: u.seq } }).sort({ seq: -1 }).limit(8).toArray(),

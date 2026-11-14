@@ -6,6 +6,7 @@
 import type { ChangeStreamInsertDocument } from "mongodb";
 import type { Cols } from "./db.ts";
 import type { Say } from "./shapes.ts";
+import { showCard } from "./card.ts";
 
 const env = {
   elKey: () => process.env.ELEVENLABS_API_KEY ?? "",
@@ -75,10 +76,12 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
     try {
       const mp3 = await ttsMp3(s.text, s.voiceId);
       await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "started", updatedAt: new Date() } });
+      void showCard(c, s.callId, "speaking", { forMs: spokenMs(s.text) });
       await playInMeeting(botId, mp3);
       await c.timings.insertOne({ callId: s.callId, teamId: s.teamId, projectId: s.projectId, stage: "say_to_audio", ms: Date.now() - t0, at: new Date() });
       log(`[voice] ${s.reason} -> meeting (${Date.now() - t0} ms): ${s.text.slice(0, 70)}`);
       await new Promise((r) => setTimeout(r, spokenMs(s.text)));
+      void showCard(c, s.callId, "listening", { force: true });
       await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "done", updatedAt: new Date() } });
     } catch (e) {
       log("[voice] failed:", e instanceof Error ? e.message : e);
