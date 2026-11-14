@@ -55,8 +55,24 @@ export async function session(callId: string) {
     d.collection("actions").find(q).sort({ createdAt: 1 }).toArray(),
     d.collection("audit_events").find(q).sort({ at: 1 }).toArray(),
   ]);
-  const row = (await sessions()).find((s) => s.id === callId) ?? null;
-  return plain<any>({ call, row, utterances, items, says, runs, timings, stages: stageStats(timings as any), conflicts, actions, audit });
+  // Session facts from this call's own rows only (no full-table aggregations: keeps the page fast).
+  const tAt = (u: any) => ms(u.startedAt ?? u.receivedAt);
+  const first = utterances.length ? tAt(utterances[0]) : NaN; const last = utterances.length ? ms(utterances[utterances.length - 1].endedAt ?? utterances[utterances.length - 1].receivedAt ?? utterances[utterances.length - 1].startedAt) : NaN;
+  const start = Math.min(ms(call?.startedAt), first) || ms(call?.startedAt); const end = ms(call?.endedAt) || last;
+  const participants = [...new Set<string>([...(call?.participants ?? []), ...utterances.map((u) => u.speaker?.displayName).filter((n) => n && n !== "Gomon" && n !== "Mission control")])];
+  const row = { participants, durationMs: Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null };
+  // Links this conversation produced or used: tickets, Slack thread, meeting, source docs.
+  const channel = process.env.SLACK_CHANNEL_ID;
+  const slackUrl = (id?: string) => { const [ch, ts] = String(id ?? "").split(":"); return ch && ts ? `https://slack.com/archives/${ch}/p${ts.replace(".", "")}` : null; };
+  const memIds = [...new Set(items.map((i: any) => i.memoryId).filter(Boolean).map(String))];
+  const docs = await d.collection("memories").aggregate([{ $match: { "sourceRefs.callId": callId } }, { $unwind: "$sourceRefs" }, { $match: { "sourceRefs.type": "doc" } }, { $group: { _id: "$sourceRefs.path" } }]).toArray();
+  const links = [
+    ...(call?.meetingUrl ? [{ kind: "Meeting", label: "Join link", url: call.meetingUrl }] : []),
+    ...(call?.slackThreadTs && channel ? [{ kind: "Slack", label: "Call thread", url: `https://slack.com/archives/${channel}/p${String(call.slackThreadTs).replace(".", "")}` }] : []),
+    ...actions.filter((a) => a.externalId).map((a) => ({ kind: a.type === "create_issue" ? "GitHub" : "Slack", label: a.payload?.title ?? a.externalId, url: a.externalUrl ?? (a.type === "post_slack" ? slackUrl(a.externalId) : null), status: a.status })),
+    ...docs.map((x) => ({ kind: "Doc", label: String(x._id), url: null })),
+  ];
+  return plain<any>({ call, row, utterances, items, says, runs, timings, stages: stageStats(timings as any), conflicts, actions, audit, links, memIds });
 }
 
 export interface Bucket { t: string; n: number }

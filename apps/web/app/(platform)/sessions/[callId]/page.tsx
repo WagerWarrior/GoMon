@@ -7,11 +7,11 @@ import { activity, session } from "@/lib/platform";
 import { clock, dur, ms, when, initials } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
-const TABS = [["transcript", "Transcript"], ["decisions", "Decisions"], ["said", "Gomon said"], ["runs", "Agent runs"], ["timings", "Timings"], ["history", "History"], ["live", "Live workspace"]] as const;
+const TABS = [["workspace", "Workspace"], ["transcript", "Transcript"], ["decisions", "Decisions"], ["said", "Gomon said"], ["runs", "Agent runs"], ["timings", "Timings"], ["history", "History"], ["live", "Live workspace"]] as const;
 
 export default async function SessionPage({ params, searchParams }: { params: Promise<{ callId: string }>; searchParams: Promise<{ tab?: string }> }) {
   const { callId: raw } = await params; const callId = decodeURIComponent(raw);
-  const tab = (await searchParams).tab ?? "transcript";
+  const tab = (await searchParams).tab ?? "workspace";
   const s = await session(callId);
   if (!s.call) notFound();
   const r = s.row; const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
@@ -36,6 +36,58 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
         <div className="p-kpi"><span className="eyebrow">Gomon said</span><b>{s.says.length}</b></div>
       </section>
       <nav className="p-tabs">{TABS.map(([k, l]) => <Link key={k} href={href(k)} aria-current={tab === k ? "page" : undefined}>{l}</Link>)}</nav>
+
+      {tab === "workspace" && (
+        <section className="ws">
+          <div className="p-card ws-col">
+            <div className="p-card-h"><h2>Transcript</h2><span className="muted small">{s.utterances.length} turns</span></div>
+            <ol className="ws-transcript">
+              {s.utterances.map((u: any) => (
+                <li key={u._id} data-gomon={u.speaker?.displayName === "Gomon" ? "1" : undefined} data-op={u.speaker?.displayName === "Mission control" ? "1" : undefined}>
+                  <div><b>{u.speaker?.displayName ?? "?"}</b><time>{rel(u.startedAt ?? u.receivedAt)}</time></div><p>{u.text}</p>
+                </li>
+              ))}
+            </ol>
+            {!s.utterances.length && <div className="p-empty">Nothing heard yet.</div>}
+          </div>
+          <div className="ws-mid">
+            <div className="p-card">
+              <div className="p-card-h"><h2>Decisions</h2><span className="muted small">{s.items.filter((i: any) => i.status === "promoted").length} locked</span></div>
+              <ul className="ws-list">
+                {[...s.items].sort((a: any, b: any) => (a.status === "promoted" ? -1 : 0) - (b.status === "promoted" ? -1 : 0)).map((i: any) => (
+                  <li key={i._id} data-status={i.status}>
+                    <div className="row"><span className="kind">{String(i.kind).replace(/_/g, " ")}</span><span className={`pill ${i.status === "promoted" ? "good" : i.status === "rejected" ? "bad" : i.status === "locking" ? "warn" : ""}`}>{i.status === "promoted" ? "locked" : i.status === "rejected" ? "vetoed" : i.status}</span></div>
+                    <p>{i.text}</p>
+                  </li>
+                ))}
+              </ul>
+              {!s.items.length && <div className="p-empty">No decisions yet.</div>}
+            </div>
+            {s.conflicts.length > 0 && (
+              <div className="p-card">
+                <div className="p-card-h"><h2>Viewpoints in conflict</h2></div>
+                <ul className="ws-list">{s.conflicts.map((c: any) => <li key={c._id}><div className="row"><span className="kind">{c.kind === "already_decided" ? "already decided" : "conflict"}</span>{c.memoryKey && <span className="mono small">{c.memoryKey}</span>}</div><p>{c.note}</p></li>)}</ul>
+              </div>
+            )}
+          </div>
+          <div className="ws-side">
+            <div className="p-card">
+              <div className="p-card-h"><h2>Links</h2></div>
+              <ul className="ws-links">
+                {s.links.map((l: any, i: number) => (
+                  <li key={i}><span className={`ws-tag t-${l.kind}`}>{l.kind}</span>{l.url ? <a href={l.url} target="_blank" rel="noreferrer">{l.label}</a> : <span className="mono small">{l.label}</span>}{l.status && <span className="muted small"> · {l.status}</span>}</li>
+                ))}
+              </ul>
+              {!s.links.length && <div className="p-empty">No tickets, threads or docs yet.</div>}
+            </div>
+            <div className="p-card">
+              <div className="p-card-h"><h2>Agent notes</h2><span className="muted small">what Gomon said</span></div>
+              <ul className="ws-notes">{s.says.map((x: any) => <li key={x._id}><span className="eyebrow">{(x.reason ?? "say").replace(/_/g, " ")} · {rel(x.createdAt)}</span><p>{x.text}</p></li>)}</ul>
+              {!s.says.length && <div className="p-empty">Gomon has not spoken.</div>}
+            </div>
+          </div>
+        </section>
+      )}
 
       {tab === "transcript" && (
         <section className="p-card">
