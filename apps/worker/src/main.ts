@@ -72,14 +72,18 @@ async function processPending(callId: string): Promise<boolean> {
   // Unclaimed, or held for this worker since ingest (postUtterance). Held docs look claimed to any other worker.
   const pendingFilter = { callId, processedAt: { $exists: false }, claimToken: { $exists: false }, $or: [{ claimedAt: { $exists: false } }, { heldBy: WORKER_ID }] };
   for (;;) {
-    const pending = await c.utterances.find(pendingFilter, { projection: { text: 1, receivedAt: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray();
+    const pending = await c.utterances.find(pendingFilter, { projection: { text: 1, receivedAt: 1, source: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray();
     if (!pending.length) return false;
     if (pending.length >= MAX_BATCH || pending.some((p) => parseWake(p.text).addressed)) break;
+    // Scribe commits whole turns, so its merge wait is short; Recall sends sentence fragments and needs the longer window.
+    const scribe = pending.every((p) => p.source === "scribe");
+    const quietMs = scribe ? 300 : MERGE_QUIET_MS;
+    const maxMs = scribe ? 1500 : MERGE_MAX_MS;
     const now = Date.now();
     const quietFor = now - pending[pending.length - 1].receivedAt.getTime();
     const waited = now - pending[0].receivedAt.getTime();
-    if (quietFor >= MERGE_QUIET_MS || waited >= MERGE_MAX_MS) break;
-    await sleep(Math.min(MERGE_QUIET_MS - quietFor, MERGE_MAX_MS - waited) + 20);
+    if (quietFor >= quietMs || waited >= maxMs) break;
+    await sleep(Math.min(quietMs - quietFor, maxMs - waited) + 20);
   }
   const ids = (await c.utterances.find(pendingFilter, { projection: { _id: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray()).map((d) => d._id);
   if (!ids.length) return false;
