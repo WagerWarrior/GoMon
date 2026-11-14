@@ -7,6 +7,8 @@ import { activity, session, sessions } from "@/lib/platform";
 import { mission } from "@/lib/mission";
 import { workflowRuns } from "@/lib/workflows";
 import SessionLive from "@/components/platform/SessionLive";
+import FlowDiagram from "@/components/platform/FlowDiagram";
+import { bursts, collapse } from "@/lib/group";
 import SessionBar, { CategoryPicker } from "@/components/platform/SessionBar";
 import { clock, dur, ms, when, initials } from "@/lib/format";
 export const dynamic = "force-dynamic";
@@ -152,40 +154,54 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
 }
 
 async function Events({ callId, runs, says, clockRel }: { callId: string; runs: any[]; says: any[]; clockRel: (t: string) => string }) {
-  const [log, wf] = await Promise.all([activity(500, callId), workflowRuns()]);
+  const [log, wf] = await Promise.all([activity(400, callId), workflowRuns()]);
   const mine = wf.runs.filter((r: any) => r.callId === callId);
+  // Agent runs come every few seconds: bundle them into bursts (a new bundle after 60 s of quiet).
+  const groups = bursts(runs, (x: any) => x.at, 60_000).reverse();
+  // The event log, with repeats folded: "agent run x12" instead of twelve rows.
+  const folded = collapse(log, (a) => a.kind);
   return (
     <>
       <section className="p-card">
-        <div className="p-card-h"><h2>Workflow runs</h2><Link href="/workflows" className="p-more">All workflows</Link></div>
-        {mine.map((r: any) => (
-          <div key={r.id} className="ev-run">
-            <div className="ev-run-h"><b className="mono">{r.key ?? ""}</b> {r.title}</div>
-            <div className="wf-chain">
-              {r.steps.map((st: any, i: number) => (
-                <span key={st.key} className={`wf-chip ev-${st.state}`}>{i > 0 && <em>→</em>}<i className={`wf-dot s-${st.state}`}><i /></i>{st.url ? <a href={st.url} target="_blank" rel="noreferrer">{st.label}</a> : st.label}{st.detail && <span className="muted small"> · {st.detail}</span>}</span>
-              ))}
-            </div>
-          </div>
-        ))}
-        {!mine.length && <div className="p-empty">No workflow fired in this session.</div>}
+        <div className="p-card-h"><h2>Workflow</h2><Link href="/workflows" className="p-more">All workflows</Link></div>
+        <FlowDiagram runs={mine} title={`${mine.length} decision${mine.length === 1 ? "" : "s"} from this session`} />
+        {mine.length > 0 && (
+          <ul className="ev-decs">
+            {mine.map((r: any) => (
+              <li key={r.id}>
+                <span className="ev-dec"><b className="mono">{r.key ?? ""}</b> {r.title}</span>
+                <span className="ev-steps">{r.steps.map((st: any) => <span key={st.key} className={`wf-dot s-${st.state}`} title={`${st.label}: ${st.detail ?? st.state}`}><i />{st.url ? <a href={st.url} target="_blank" rel="noreferrer">{st.label}</a> : st.label}</span>)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
-      <section className="p-card p-flush">
-        <div className="p-card-h mx-pad"><h2>Tool calls</h2><span className="muted small">each agent run and what it used</span></div>
-        <table className="p-table">
-          <thead><tr><th>At</th><th>Trigger</th><th>Tools</th><th className="num">Batch</th></tr></thead>
-          <tbody>{runs.slice().reverse().map((x: any) => (
-            <tr key={x._id}><td className="mono">{clockRel(x.at)}</td><td>{x.wake ? <span className="pill good">wake word</span> : "listening"}</td>
-              <td><span className="ev-tools"><span>memory.search · {(x.retrievedMemoryIds ?? []).length} hits</span><span>llm.analyze</span>{x.memoryEnabled === false && <span>memory off</span>}</span></td>
-              <td className="num">{x.batchSize ?? 1}</td></tr>
-          ))}</tbody>
-        </table>
-        {!runs.length && <div className="p-empty">No agent runs.</div>}
-      </section>
-      <section className="p-card">
-        <div className="p-card-h"><h2>Event log</h2><span className="muted small">{log.length} events · {says.length} lines spoken</span></div>
-        <ul className="p-feed">{log.map((a, i) => <li key={i}><time>{clock(a.at)}</time><span className={`p-kind ${a.tone ?? ""}`}>{a.kind}</span><span className="p-feed-t"><b>{a.actor}</b> {a.text}</span></li>)}</ul>
-        {!log.length && <div className="p-empty">No events.</div>}
+      <section className="p-row p-row-1-1">
+        <div className="p-card">
+          <div className="p-card-h"><h2>Tool calls</h2><span className="muted small">{runs.length} agent runs in {groups.length} bundle{groups.length === 1 ? "" : "s"}</span></div>
+          <ul className="ev-bundles">
+            {groups.slice(0, 12).map((g: any[], i: number) => {
+              const hits = g.reduce((n, x) => n + (x.retrievedMemoryIds ?? []).length, 0); const wakes = g.filter((x) => x.wake).length; const batch = g.reduce((n, x) => n + (x.batchSize ?? 1), 0);
+              return (
+                <li key={i}>
+                  <details>
+                    <summary><span className="mono small muted">{clockRel(g[0].at)}{g.length > 1 ? ` → ${clockRel(g[g.length - 1].at)}` : ""}</span><b>{g.length} run{g.length === 1 ? "" : "s"}</b>
+                      <span className="ev-tools"><span>memory.search ×{g.length} · {hits} hits</span><span>llm.analyze ×{g.length}</span>{wakes > 0 && <span className="wake">wake ×{wakes}</span>}</span>
+                      <span className="muted small ev-r">{batch} utterance{batch === 1 ? "" : "s"}</span></summary>
+                    <ol className="ev-runs">{g.map((x: any) => <li key={x._id}><span className="mono small muted">{clockRel(x.at)}</span>{x.wake ? "wake word" : "listening"} · {x.batchSize ?? 1} utt · {(x.retrievedMemoryIds ?? []).length} hits{x.memoryEnabled === false ? " · memory off" : ""}</li>)}</ol>
+                  </details>
+                </li>
+              );
+            })}
+          </ul>
+          {groups.length > 12 && <span className="muted small">{groups.length - 12} older bundles not shown.</span>}
+          {!runs.length && <div className="p-empty">No agent runs.</div>}
+        </div>
+        <div className="p-card">
+          <div className="p-card-h"><h2>Event log</h2><span className="muted small">{log.length} events · {says.length} spoken</span></div>
+          <ul className="p-feed">{folded.slice(0, 60).map((f, i) => <li key={i}><time>{clock(f.item.at)}</time><span className={`p-kind ${f.item.tone ?? ""}`}>{f.item.kind}{f.n > 1 && <em className="ev-n"> ×{f.n}</em>}</span><span className="p-feed-t"><b>{f.item.actor}</b> {f.item.text}</span></li>)}</ul>
+          {!log.length && <div className="p-empty">No events.</div>}
+        </div>
       </section>
     </>
   );

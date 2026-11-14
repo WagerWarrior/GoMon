@@ -1,78 +1,77 @@
 import Link from "next/link";
 import AutoRefresh from "@/components/platform/AutoRefresh";
-import { storedWorkflows, workflowRuns, type Step } from "@/lib/workflows";
+import FlowDiagram from "@/components/platform/FlowDiagram";
+import { storedWorkflows, toolName, workflowRuns, type Run, type Step } from "@/lib/workflows";
 import WorkflowToggle from "@/components/platform/WorkflowToggle";
-import { system } from "@/lib/platform";
+import { sessions } from "@/lib/platform";
 import { when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
-const FLOW = [
-  { key: "meeting", title: "Meeting", sub: "Recall bot hears the call" },
-  { key: "lock", title: "Decision locks", sub: "consensus or a click, veto window" },
-  { key: "policy", title: "Policy", sub: "role may act" },
-  { key: "slack", title: "Slack", sub: "post in the call thread" },
-  { key: "github", title: "GitHub", sub: "open an issue" },
-  { key: "confirm", title: "Read-back", sub: "verify it landed" },
-];
-
 export default async function Workflows() {
-  const [{ runs, totals }, stored] = await Promise.all([workflowRuns(), storedWorkflows()]); const sys = system();
-  const ready: Record<string, boolean> = Object.fromEntries(sys.connectors.map((c) => [c.name, c.ready]));
-  // The connectors service holds the tokens, not this server: a confirmed send also proves the connector works.
-  ready.Slack ||= totals.slack > 0; ready["GitHub issues"] ||= totals.github > 0;
+  const [{ runs, tools, totals }, stored, list] = await Promise.all([workflowRuns(), storedWorkflows(), sessions()]);
+  const title = new Map(list.map((s) => [s.id, s]));
+  // One group per session: many conversations at once stay readable.
+  const groups = new Map<string, Run[]>();
+  for (const r of runs as Run[]) { const k = r.callId ?? "—"; (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
+  const cols: { key: string; label: string }[] = (runs[0]?.steps ?? []).map((s: Step) => ({ key: s.key, label: s.label }));
   return (
     <>
       <AutoRefresh />
-      <header className="p-head"><div><h1>Workflows</h1><span className="eyebrow">Locked decision → Slack → GitHub</span></div></header>
+      <header className="p-head"><div><h1>Workflows</h1><span className="eyebrow">Locked decisions, sent to the tools you have connected</span></div></header>
 
-      {stored.map((w: any) => (
-        <section key={w._id} className="p-card wf-flow">
-          <div className="p-card-h"><h2>{w.name}</h2><div className="p-head-r"><span className="muted small">fired {w.fired}×{w.lastFired ? ` · last ${when(w.lastFired)}` : ""}</span><WorkflowToggle id={w._id} enabled={w.enabled} /></div></div>
-          <div className="wf-chain">
-            <span className="wf-chip trig">When {String(w.trigger).replace(/_/g, " ")}</span>
-            {w.steps.map((st: any, i: number) => <span key={i} className="wf-chip"><em>→</em>{st.type === "post_slack" ? "Post to Slack thread" : st.type === "create_issue" ? "Open GitHub issue" : st.type}</span>)}
-            <span className="wf-chip"><em>→</em>Policy check + read-back</span>
-          </div>
-        </section>
-      ))}
-
-      <section className="p-card wf-flow">
-        <div className="p-card-h"><h2>How a decision becomes a ticket</h2></div>
-        <ol>
-          {FLOW.map((f, i) => (
-            <li key={f.key}>
-              <span className="wf-n">{String(i + 1).padStart(2, "0")}</span>
-              <b>{f.title}</b><span className="muted small">{f.sub}</span>
-              {f.key === "slack" && <span className={`pill ${ready.Slack ? "good" : "warn"}`}>{ready.Slack ? "connected" : "not set"}</span>}
-              {f.key === "github" && <span className={`pill ${ready["GitHub issues"] ? "good" : "warn"}`}>{ready["GitHub issues"] ? "connected" : "not set"}</span>}
-              {f.key === "meeting" && <span className="pill good">trigger</span>}
-            </li>
-          ))}
-        </ol>
+      <section className="p-card">
+        <div className="p-card-h"><h2>All sessions</h2><span className="muted small">{totals.runs} decisions · {totals.confirmed} confirmed</span></div>
+        <FlowDiagram runs={runs} />
       </section>
 
-      <section className="p-kpis p-kpis-4">
-        <div className="p-kpi"><span className="eyebrow">Runs</span><b>{totals.runs}</b></div>
-        <div className="p-kpi"><span className="eyebrow">Slack posts</span><b>{totals.slack}</b></div>
-        <div className="p-kpi"><span className="eyebrow">GitHub issues</span><b>{totals.github}</b></div>
+      {stored.length > 0 && (
+        <section className="p-card">
+          <div className="p-card-h"><h2>Automations</h2></div>
+          <div className="wf-autos">
+            {stored.map((w: any) => (
+              <div key={w._id} className="wf-auto">
+                <div className="wf-chain">
+                  <span className="wf-chip trig">When {String(w.trigger).replace(/_/g, " ")}</span>
+                  {w.steps.map((st: any, i: number) => <span key={i} className="wf-chip"><em>→</em>{toolName(st.type)}</span>)}
+                </div>
+                <span className="muted small">{w.name} · fired {w.fired}×{w.lastFired ? ` · last ${when(w.lastFired)}` : ""}</span>
+                <WorkflowToggle id={w._id} enabled={w.enabled} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="p-kpis" style={{ gridTemplateColumns: `repeat(${2 + tools.length},minmax(0,1fr))` }}>
+        <div className="p-kpi"><span className="eyebrow">Decisions</span><b>{totals.runs}</b></div>
+        {tools.map((t: any) => <div key={t.type} className="p-kpi"><span className="eyebrow">{t.name}</span><b>{t.done}</b></div>)}
         <div className="p-kpi"><span className="eyebrow">Confirmed</span><b>{totals.confirmed}</b></div>
       </section>
 
-      <section className="p-card p-flush">
-        <table className="p-table wf-runs">
-          <thead><tr><th>Decision</th><th>When</th>{FLOW.map((f) => <th key={f.key}>{f.title}</th>)}</tr></thead>
-          <tbody>
-            {runs.map((r: any) => (
-              <tr key={r.id}>
-                <td className="p-wide"><b className="mono">{r.key ?? ""}</b> {r.title}{r.callId && <span className="muted small p-id"><Link href={`/sessions/${encodeURIComponent(r.callId)}`}>{r.callId}</Link></span>}</td>
-                <td className="small muted">{when(r.at)}</td>
-                {r.steps.map((s: Step) => <td key={s.key}><Dot s={s} /></td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!runs.length && <div className="p-empty">No runs yet. Lock a decision in a call.</div>}
-      </section>
+      {[...groups.entries()].map(([callId, rs]) => {
+        const s = title.get(callId);
+        return (
+          <section key={callId} className="p-card p-flush">
+            <div className="p-card-h mx-pad">
+              <h2>{callId === "—" ? "No session" : <Link href={`/sessions/${encodeURIComponent(callId)}?tab=events`}>{s?.title ?? callId}</Link>}</h2>
+              <span className="muted small">{s?.category ? `${s.category} · ` : ""}{rs.length} decision{rs.length === 1 ? "" : "s"}</span>
+            </div>
+            <table className="p-table wf-runs">
+              <thead><tr><th>Decision</th><th>When</th>{cols.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+              <tbody>
+                {rs.map((r) => (
+                  <tr key={r.id}>
+                    <td className="p-wide"><b className="mono">{r.key ?? ""}</b> {r.title}</td>
+                    <td className="small muted">{when(r.at)}</td>
+                    {cols.map((c) => { const st = r.steps.find((x) => x.key === c.key); return <td key={c.key}>{st ? <Dot s={st} /> : "—"}</td>; })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        );
+      })}
+      {!runs.length && <section className="p-card"><div className="p-empty">No runs yet. Lock a decision in a call.</div></section>}
     </>
   );
 }
