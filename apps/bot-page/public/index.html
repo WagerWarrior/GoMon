@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gomon</title>
+<style>
+  :root { --bg:#0b1220; --fg:#e8eefc; --muted:#8aa0c8; --accent:#00ed64; --warn:#ffb020; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  /* Recall renders this page as the bot's camera (16:9). */
+  main { height:100%; display:grid; place-items:center; padding:5vh 6vw; }
+  .card { width:100%; max-width:1100px; text-align:center; }
+  .orb { width:22vmin; height:22vmin; margin:0 auto 4vmin; border-radius:50%;
+    background: radial-gradient(circle at 35% 35%, #6dffa8, var(--accent) 45%, #007a33);
+    box-shadow: 0 0 0 0 rgba(0,237,100,.5); transition: transform .2s; }
+  body.speaking .orb { animation: pulse 1s infinite; transform: scale(1.06); }
+  body.offline .orb { filter: grayscale(1) brightness(.6); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(0,237,100,.55)} 100%{box-shadow:0 0 0 6vmin rgba(0,237,100,0)} }
+  h1 { margin:0; font-size:7vmin; letter-spacing:.02em; }
+  #status { color:var(--muted); font-size:3.2vmin; margin-top:1vmin; }
+  #line { margin-top:3vmin; font-size:3.6vmin; min-height:2.8em; }
+  #unlock { display:none; margin-top:3vmin; font-size:2.6vmin; padding:1.2vmin 3vmin; border-radius:999px;
+    border:0; background:var(--warn); color:#111; cursor:pointer; }
+  body.locked #unlock { display:inline-block; }
+</style>
+</head>
+<body class="offline">
+<main><div class="card">
+  <div class="orb" aria-hidden="true"></div>
+  <h1>Gomon</h1>
+  <div id="status">connecting…</div>
+  <div id="line"></div>
+  <button id="unlock">Click to enable Gomon's voice</button>
+</div></main>
+<script>
+(() => {
+  const $status = document.getElementById("status");
+  const $line = document.getElementById("line");
+  const $unlock = document.getElementById("unlock");
+  const queue = [];           // [{sayId, text, priority}]
+  let current = null;         // {item, audio}
+
+  const ack = (sayId, state, extra = {}) =>
+    fetch("/say/ack", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sayId, state, ...extra }) }).catch(() => {});
+
+  function setStatus(s) { $status.textContent = s; }
+
+  function playNext() {
+    if (current || !queue.length) return;
+    const item = queue.shift();
+    const audio = new Audio(`/tts/${encodeURIComponent(item.sayId)}`);
+    const t0 = performance.now();
+    current = { item, audio };
+    $line.textContent = `“${item.text}”`;
+    audio.addEventListener("playing", () => {
+      document.body.classList.add("speaking");
+      setStatus("speaking");
+      ack(item.sayId, "started", { pageLatencyMs: Math.round(performance.now() - t0) });
+    }, { once: true });
+    const finish = (state) => () => {
+      if (!current || current.item !== item) return;
+      document.body.classList.remove("speaking");
+      current = null;
+      setStatus("listening");
+      ack(item.sayId, state);
+      playNext();
+    };
+    audio.addEventListener("ended", finish("done"), { once: true });
+    audio.addEventListener("error", finish("error"), { once: true });
+    audio.play().catch((e) => {
+      if (e.name === "NotAllowedError") {          // local browser autoplay block
+        document.body.classList.add("locked");
+        queue.unshift(item); current = null;
+        setStatus("audio blocked by the browser");
+      } else finish("error")();
+    });
+  }
+
+  $unlock.addEventListener("click", () => {
+    document.body.classList.remove("locked");
+    setStatus("listening");
+    playNext();
+  });
+
+  const es = new EventSource("/say/stream" + location.search) // ?callId= scopes this page to one call;
+  es.onopen = () => { document.body.classList.remove("offline"); setStatus("listening"); };
+  es.onerror = () => { document.body.classList.add("offline"); setStatus("reconnecting…"); };
+  es.addEventListener("say", (ev) => {
+    const item = JSON.parse(ev.data);
+    // A high-priority line (someone addressed Gomon) cancels anything not yet spoken.
+    if (item.priority === "high") queue.splice(0).forEach((q) => ack(q.sayId, "cancelled"));
+    queue.push(item);
+    playNext();
+  });
+  es.addEventListener("cancel", () => queue.splice(0).forEach((q) => ack(q.sayId, "cancelled")));
+})();
+</script>
+</body>
+</html>

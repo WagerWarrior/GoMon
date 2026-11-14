@@ -1,0 +1,17 @@
+{
+  "name": "@gomon/bot-page",
+  "private": true,
+  "type": "module",
+  "description": "Gomon meeting presence: Recall.ai bot, transcript -> utterances, ElevenLabs TTS bot page",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --watch src/server.js",
+    "start": "node --env-file-if-exists=../../.env src/server.js",
+    "create-bot": "node --env-file-if-exists=../../.env scripts/create-bot.js",
+    "say": "node --env-file-if-exists=../../.env scripts/say.js",
+    "test": "node --test test/*.test.js",
+    "sink": "node --env-file-if-exists=../../.env scripts/dev-sink.js"
+  }
+}
