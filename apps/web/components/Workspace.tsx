@@ -8,6 +8,7 @@ import { buildDiagram } from "@/lib/mermaid";
 import { stageStats } from "@/lib/stats";
 import type { ActionDoc, AuditEvent, CallDoc, CallItem, Conflict, Member, Memory, TimingDoc, Utterance } from "@/lib/types";
 import { describeAction } from "@/lib/actions";
+import ShareLink from "@/components/platform/ShareLink";
 
 type Data = { calls: CallDoc[]; utterances: Utterance[]; call_items: CallItem[]; memories: Memory[]; conflicts: Conflict[]; actions: ActionDoc[]; audit_events: AuditEvent[]; timings: TimingDoc[]; members: Member[] };
 const EMPTY: Data = { calls: [], utterances: [], call_items: [], memories: [], conflicts: [], actions: [], audit_events: [], timings: [], members: [] };
@@ -154,7 +155,7 @@ export default function Workspace({ callId }: { callId: string }) {
                 <td><span className={`pill ${a.status === "sent" || a.status === "confirmed" ? "good" : a.status === "denied" || a.status === "failed" ? "bad" : "warn"}`}>{a.status}</span>{a.error ? <div className="muted small">{a.error}</div> : null}</td>
                 <td>{a.requestedBy}</td>
                 <td>{a.policyCheck ? <span className={a.policyCheck.allowed ? "ok" : "badtxt"}>{a.policyCheck.allowed ? "allowed" : "denied"}</span> : <span className="muted">pending</span>}<div className="muted small">{a.policyCheck?.reason}</div></td>
-                <td>{a.externalUrl ? <a href={a.externalUrl} target="_blank" rel="noreferrer">{a.externalId}</a> : a.externalId ?? <span className="muted">not sent</span>}</td></tr>))}</tbody></table>
+                <td>{a.externalUrl ? <span className="sh-cell"><a href={a.externalUrl} target="_blank" rel="noreferrer">{a.externalId}</a><ShareLink callId={callId} url={a.externalUrl} label={describeAction(a).slice(0, 100)} /></span> : a.externalId ?? <span className="muted">not sent</span>}</td></tr>))}</tbody></table>
           <h3>Audit trail</h3>
           <ul className="audit">{data.audit_events.length === 0 && <li className="muted">Nothing yet.</li>}
             {data.audit_events.map((e) => <li key={id(e)}><time>{clock(e.at)}</time><b className={/denied/.test(e.type) ? "badtxt" : ""}>{e.type.replace(/_/g, " ")}</b><span>{e.actor}</span><span className="muted">{e.reason}</span></li>)}</ul></section>

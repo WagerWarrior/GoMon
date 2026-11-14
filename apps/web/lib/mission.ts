@@ -144,3 +144,40 @@ export async function endMeeting(input: { callId?: string; actor?: string }) {
   await d.collection("audit_events").insertOne({ teamId, projectId: typeof call.projectId === "string" ? call.projectId : scope().projectId, callId, at: now, type: "meeting_ended", actor: String(input.actor ?? "").trim() || "Mission control", reason: bot, ref: { botId, from: "dashboard" } });
   return { status: 200, data: { ok: true, callId, bot, wasLive: call.status === "live" } };
 }
+
+/**
+ * Send a link from the Board into the meeting chat (Max, Nov 14). Only links Gomon really filed can be sent: the url must be
+ * the `externalUrl` of one of this team's outbox actions (a GitHub issue, a Slack post, the call's GitHub record), so the
+ * dashboard cannot be used to post arbitrary links. The request is a `chat_messages` row with status "requested"; the worker
+ * (which holds the Recall key) posts it and marks it sent. With RECALL_API_KEY on this machine it is posted directly.
+ */
+export async function shareLink(input: { callId?: string; url?: string; label?: string; actor?: string }) {
+  const callId = String(input.callId ?? "").trim(); const url = String(input.url ?? "").trim();
+  if (!callId || !/^https:\/\//.test(url)) return { status: 400, data: { error: "callId and an https url are required" } };
+  const d = await db(); const { teamId } = scope(); const now = new Date();
+  const [call, action] = await Promise.all([
+    d.collection("calls").findOne({ _id: callId as any, teamId }, { projection: { botId: 1, projectId: 1, status: 1 } }),
+    d.collection("actions").findOne({ teamId, externalUrl: url }, { projection: { type: 1, externalId: 1, payload: 1 } }),
+  ]);
+  if (!call) return { status: 404, data: { error: "unknown call" } };
+  if (!action) return { status: 403, data: { error: "only links Gomon filed (GitHub, Slack) can be sent to the chat" } };
+  const label = String(input.label ?? "").trim().slice(0, 120) || String(action.payload?.title ?? action.externalId ?? "Link");
+  const message = `Gomon: ${label}: ${url}`.slice(0, 500);
+  const botId = typeof call.botId === "string" ? call.botId : null;
+  const actor = String(input.actor ?? "").trim() || "Mission control";
+  let status: "requested" | "sent" | "failed" | "no_bot" = botId ? "requested" : "no_bot";
+  let error: string | undefined;
+  const key = process.env.RECALL_API_KEY;
+  if (botId && key) {
+    const r = await fetch(`https://${process.env.RECALL_REGION || "us-west-2"}.recall.ai/api/v1/bot/${encodeURIComponent(botId)}/send_chat_message/`, {
+      method: "POST", headers: { authorization: `Token ${key}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ to: "everyone", message }), signal: AbortSignal.timeout(5000),
+    }).catch(() => null);
+    status = r?.ok ? "sent" : "failed";
+    if (!r?.ok) error = `Recall ${r?.status ?? "unreachable"}`;
+  }
+  const projectId = typeof call.projectId === "string" ? call.projectId : scope().projectId;
+  await d.collection("chat_messages").insertOne({ callId, teamId, projectId, at: now, message, status, url, label, source: "action", requestedBy: actor, ...(botId ? { botId } : {}), ...(error ? { error } : {}) });
+  await d.collection("audit_events").insertOne({ teamId, projectId, callId, at: now, type: "link_shared", actor, reason: `${label} -> meeting chat (${status})`, ref: { url } });
+  return { status: status === "no_bot" ? 409 : 201, data: { ok: status !== "no_bot" && status !== "failed", status, error: status === "no_bot" ? "Gomon is not in a meeting for this call" : error } };
+}

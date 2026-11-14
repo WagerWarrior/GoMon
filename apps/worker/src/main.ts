@@ -29,6 +29,7 @@ import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
 import { sweepSpeakers } from "./speakers.ts";
+import { watchChatRequests } from "./chat-requests.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -522,5 +523,6 @@ setInterval(() => { catchUp().catch((e) => console.error("[catchup]", e)); }, 15
 // After a call ends, its lines are renamed to the people Recall heard (speakers.ts); live, the listener knows only "you" / "others".
 setInterval(() => { sweepSpeakers(c).catch((e) => console.error("[speakers]", e instanceof Error ? e.message : e)); }, 20_000);
 watchEndRequests();
+watchChatRequests(c);
 await catchUp();
 await watchUtterances();

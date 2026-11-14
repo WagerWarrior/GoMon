@@ -39,7 +39,13 @@ Max ran the demo and Gomon answered without its name. Evidence (call-20261114205
    polling endpoints answer 400 (probed on your bots, read-only). Live names = set `PUBLIC_BASE_URL` (the realtime
    transcript mode in `recall.ts`). Not proven on real data: the only finished call with lines (call-202611142119-4727)
    has an empty timeline (nobody unmuted in the Meet?), so the dry run renamed 0 of 32. People must be unmuted in Meet.
-Verified: worker typecheck 0, `npm test` 31/31 (`test/floor.test.ts`, `test/people.test.ts`, `test/window.test.ts`), web typecheck 0. **Not verified live**: I did not
+9. **Share links from the Board** (`ShareLink.tsx` beside each filed link in Actions & audit; `chat-requests.ts`, hooked in
+   `main.ts`): Copy link, or Send to chat -> `POST /api/sessions/:id/share` writes a `chat_messages` row with status
+   "requested" (only a url that is some action's `externalUrl` is accepted, 403 otherwise), audit `link_shared`; the worker
+   claims the row and posts it through the bot (`send_chat_message`), rows older than 2 min are not posted. Checked: 403
+   for a link Gomon did not file, 400 for a non-https url. Not checked: a real send, because the reset left no action
+   with an `externalUrl` in Atlas. ADR artifacts have no public link yet (they live only in `artifacts`).
+Verified: worker typecheck 0, `npm test` 33/33 (`test/floor.test.ts`, `test/people.test.ts`, `test/window.test.ts`), web typecheck 0. **Not verified live**: I did not
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 

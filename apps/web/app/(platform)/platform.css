@@ -822,6 +822,12 @@
 @media(max-width:1100px){.en-pipe{grid-template-columns:repeat(3,minmax(0,1fr))}.en-pipe li:nth-child(3)::before{display:none}}
 @media(max-width:640px){.en-pipe{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+/* Share a filed link (components/platform/ShareLink.tsx): two small hairline pills beside the link */
+.sh-cell{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sh{display:inline-flex;align-items:center;gap:4px;font-size:12px}
+.sh button{border:1px solid var(--line);background:#fff;color:#0a0a0a;border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.sh button:hover{border-color:#0a0a0a}.sh button:disabled{opacity:.6;cursor:default}
+.sh em{font-style:normal;color:#5b5f5c;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* End meeting (components/platform/EndMeeting.tsx): hairline pill, red square */
 .em{display:inline-flex;align-items:center;gap:8px;min-width:0;font-size:12px}
 .em-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;color:#0a0a0a;border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap}
