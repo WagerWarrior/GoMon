@@ -25,15 +25,15 @@ export function traceLine(name: string, t: Trace): string {
   const shown = t.memoryKeys.slice(0, 4).join(", ");
   const more = t.memoryKeys.length > 4 ? `, +${t.memoryKeys.length - 4}` : "";
   const memory = !t.memoryOn
-    ? "memory is off for this call"
-    : `Atlas memory search: ${t.memoryKeys.length ? `${t.memoryKeys.length} hits (${shown}${more})` : "no hits"} in ${secs(t.memoryMs)}`;
+    ? "memory off for this call"
+    : `Atlas memory: ${t.memoryKeys.length ? `${t.memoryKeys.length} hits (${shown}${more})` : "no hits"}`;
   const steps = [
     memory,
-    ...(t.memoryOn ? [`past meetings and ADRs: ${t.knowledgeHits} ${t.knowledgeHits === 1 ? "hit" : "hits"} in ${secs(t.knowledgeMs)}`] : []),
-    `read ${t.records} team records, ${t.openIssues} open GitHub ${t.openIssues === 1 ? "issue" : "issues"}`,
-    `${modelLabel(t.model)} wrote the answer in ${secs(t.modelMs)}${t.firstMs != null ? `, first sentence to the voice at ${secs(t.firstMs)}` : ""}`,
+    ...(t.memoryOn ? [`Past meetings: ${t.knowledgeHits} ${t.knowledgeHits === 1 ? "hit" : "hits"}`] : []),
+    `Tickets: ${t.openIssues} open, ${t.records} records read`,
+    `${modelLabel(t.model)}: ${secs(t.modelMs)}${t.firstMs != null ? ` (first sentence at ${secs(t.firstMs)})` : ""}`,
   ];
-  return `${name} · how I answered (${secs(t.totalMs)}): ${steps.join(" · ")}`;
+  return `${name} answered in ${secs(t.totalMs)}  |  ${steps.join("  |  ")}`;
 }
 
 export const chatTraceOn = () => process.env.CHAT_TRACE !== "off";

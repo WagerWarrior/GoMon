@@ -36,7 +36,10 @@ type MessagesResponse = { error?: { message: string } };
 /** True when this utterance should be answered by the fast lane (decided at ingest, stored as `fastReply`). */
 export function wantsFastReply(text: string): boolean {
   const w = parseWake(text);
-  return w.addressed && !ACTION.test(w.rest);
+  // The whole sentence is checked, not only what follows the name: "can you assign it to Max, please? Hey, Gomon." (live,
+  // Nov 14) had nothing after the name, got "there's nothing to assign" from this lane, and two seconds later the action
+  // lane filed and assigned the issue.
+  return w.addressed && !ACTION.test(text);
 }
 
 const SLOW_MS = 4500;
@@ -131,7 +134,7 @@ async function answer(ctx: Ctx, u: Asked, dry: boolean, onSpeaking: () => void =
     signal: AbortSignal.timeout(12_000),
     body: JSON.stringify({
       model: config.analyzeModel,
-      max_tokens: 140,
+      max_tokens: 200,
       stream: true,
       ...modelTuning(),
       system: `${agentProfile(config.agentName)}
@@ -197,12 +200,15 @@ ${tpl.persona}
   }
   const modelMs = Date.now() - tModel;
   const spoken = early ? await early : null;
+  if (dry && process.env.ASK_RAW) console.error(`[ask] raw (${stream.stopReason}, ${stream.usage.output_tokens} tokens): ${JSON.stringify(raw)}`);
   // The meter: what was in the window for this answer, section by section, next to the API's real token counts.
   if (!dry) void ctx.c.agentEvents.insertOne({
     callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "context_window", lane: "fast",
     sections: [...records.use, ...win.use], estimatedTokens: records.tokens + win.tokens, droppedLines: records.dropped + win.dropped,
     inputTokens: stream.usage.input_tokens ?? null, outputTokens: stream.usage.output_tokens ?? null, cachedTokens: stream.usage.cache_read_input_tokens ?? 0,
     firstSentenceMs: firstMs, model: config.analyzeModel,
+    // An answer that ran out of room is kept as written, to see what filled it (live Nov 14: 140 tokens, four words spoken).
+    ...(stream.stopReason === "max_tokens" ? { cutRaw: raw.slice(0, 1200) } : {}),
   }).catch((e) => console.error("[window]", e instanceof Error ? e.message : e));
   // Spoken answers: whole sentences, about 42 words at most, no links (speech.ts).
   let full = spokenLine(raw.trim(), stream.stopReason === "max_tokens");

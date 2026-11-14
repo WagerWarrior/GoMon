@@ -344,6 +344,31 @@ function watchEndRequests(): void {
   cs.on("error", (e) => console.warn("[end] stream error:", e.message));
 }
 
+/**
+ * Meeting ended (Max, Nov 14): when Gomon is removed or the meeting closes, nothing told the worker, so the call stayed
+ * "live" on the dashboard. Every 10 s each live call's bot is read from Recall; once Recall says the call ended, the call is
+ * marked ended at the time Recall gives (so a call that ended long ago is not treated as just finished).
+ */
+const ENDED_CODES = new Set(["call_ended", "done", "fatal"]);
+async function sweepEndedBots(): Promise<void> {
+  if (!config.recall.apiKey) return;
+  const live = await c.calls.find({ teamId: config.teamId, status: "live", botId: { $type: "string" } }).project({ botId: 1 }).limit(10).toArray();
+  for (const call of live) {
+    const res = await fetch(`https://${config.recall.region}.recall.ai/api/v1/bot/${call.botId}/`, {
+      headers: { authorization: `Token ${config.recall.apiKey}`, accept: "application/json" }, signal: AbortSignal.timeout(4000),
+    }).catch(() => null);
+    if (!res?.ok) continue;
+    const changes = ((await res.json()) as { status_changes?: { code?: string; created_at?: string }[] }).status_changes ?? [];
+    const end = changes.find((s) => ENDED_CODES.has(String(s.code)));
+    if (!end) continue;
+    const callId = String(call._id);
+    const at = end.created_at && !Number.isNaN(Date.parse(end.created_at)) ? new Date(end.created_at) : new Date();
+    await silence(callId);
+    const won = await c.calls.updateOne({ _id: callId as never, status: "live" }, { $set: { status: "ended", endedAt: at, botLeftAt: at, agentState: { state: "listening", detail: "meeting ended", at: new Date() } } });
+    if (won.modifiedCount) console.log(`[ended] ${callId}: Recall reports ${end.code} at ${at.toISOString()}; call marked ended`);
+  }
+}
+
 /** Take Gomon out of the meeting and end the call. The call ends even if Recall reports the bot already gone. */
 async function leaveMeeting(callId: string, b: Record<string, unknown>, me: PublicUser | null): Promise<Reply> {
   const call = await c.calls.findOne({ _id: callId as never, teamId: config.teamId });
@@ -542,6 +567,8 @@ setInterval(() => { sweepAllLocks().catch((e) => console.error("[locks]", e)); }
 setInterval(() => { catchUp().catch((e) => console.error("[catchup]", e)); }, 15_000);
 // After a call ends, its lines are renamed to the people Recall heard (speakers.ts); live, the listener knows only "you" / "others".
 setInterval(() => { sweepSpeakers(c).catch((e) => console.error("[speakers]", e instanceof Error ? e.message : e)); }, 20_000);
+// A bot that was removed from the meeting, or whose meeting ended, is noticed from Recall's own status (no webhook needed).
+setInterval(() => { sweepEndedBots().catch((e) => console.error("[ended]", e instanceof Error ? e.message : e)); }, 10_000);
 watchEndRequests();
 watchChatRequests(c);
 await catchUp();

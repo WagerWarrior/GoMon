@@ -24,6 +24,8 @@ const env = {
 /** Frame period per animated state (ms). Listening is one still frame. */
 export const FRAME_MS: Record<CardState, number> = { listening: 0, thinking: 600, speaking: 700, locking: 1000 };
 const MAX_ANIMATE_MS = 45_000;
+/** Longest the tile shows thinking without an answer starting. The slowest answers measured are under 5 s. */
+export const THINKING_MAX_MS = 12_000;
 const LOCK_MS = 10_000;
 
 // Static fallback cards. Object.fromEntries loses the key type; the keys are exactly STATES.
@@ -219,5 +221,8 @@ export async function showCard(c: Cols, callId: string, state: CardState, opts: 
     }, every);
     l.timer.unref?.();
   }
+  // Thinking ends by itself: when the name is caught on a half-said sentence and no question follows, nothing else would
+  // take the dots off the tile (live Nov 14: they ran until someone said stop).
+  if (state === "thinking") setTimeout(() => { if (live.get(callId) === l) void showCard(c, callId, "listening", { force: true }); }, THINKING_MAX_MS).unref?.();
   await push(c, callId, l, true);
 }
