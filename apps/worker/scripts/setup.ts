@@ -117,6 +117,8 @@ await Promise.all([
   ix("utterances", { callId: 1, sourceKey: 1 }, { unique: true }),
   ix("utterances", { callId: 1, seq: 1 }),
   ix("utterances", { processedAt: 1, receivedAt: 1 }),
+  ix("utterances", { callId: 1, processedAt: 1, claimedAt: 1, seq: 1 }),
+  ix("utterances", { claimToken: 1 }, { sparse: true }),
   ix("call_items", { callId: 1, status: 1, createdAt: 1 }),
   ix("call_items", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
   ix("memories", { teamId: 1, projectId: 1, status: 1, kind: 1 }),

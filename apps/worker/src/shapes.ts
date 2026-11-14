@@ -19,7 +19,7 @@ export type Utterance = {
   text: string;
   source: "recall" | "scribe" | "typed";
   startedAt?: Date; endedAt?: Date; receivedAt: Date;
-  claimedAt?: Date; processedAt?: Date; error?: string;
+  claimedAt?: Date; claimToken?: string; processedAt?: Date; error?: string;
 };
 
 export type CallItem = {

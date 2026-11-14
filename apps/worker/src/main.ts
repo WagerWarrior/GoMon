@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { MongoServerError, type ObjectId, type ResumeToken } from "mongodb";
 import { config } from "./config.ts";
 import { cols, connect } from "./db.ts";
-import { handleUtterance, sweepLocks } from "./agent.ts";
+import { handleBatch, sweepLocks, type Stored } from "./agent.ts";
 import type { Ctx } from "./governance.ts";
 import type { Say, Utterance } from "./shapes.ts";
 
@@ -20,40 +20,49 @@ const c = cols(db);
 const ctx: Ctx = { client, c, teamId: config.teamId, projectId: config.projectId };
 const STREAM_ID = `worker-utterances:${config.teamId}:${config.projectId}`;
 
-// ---------- processing: serialized per call, idempotent claim, never twice ----------
-const chains = new Map<string, Promise<void>>();
-function enqueue(u: Utterance & { _id: ObjectId }): Promise<void> {
-  const prev = chains.get(u.callId) ?? Promise.resolve();
-  const next = prev.then(() => processOne(u._id)).catch((e) => console.error("[agent]", e));
-  chains.set(u.callId, next);
-  return next;
+// ---------- processing: one batch at a time per call; everything that arrived meanwhile is the next batch ----------
+const MAX_BATCH = 8;
+const running = new Set<string>();
+const again = new Set<string>();
+
+function schedule(callId: string): void {
+  if (running.has(callId)) { again.add(callId); return; }
+  running.add(callId);
+  void (async () => {
+    try {
+      do { again.delete(callId); while (await processPending(callId)); } while (again.has(callId));
+    } catch (e) { console.error("[agent]", e); }
+    finally { running.delete(callId); }
+  })();
 }
 
-async function processOne(id: ObjectId): Promise<void> {
-  const u = await c.utterances.findOneAndUpdate(
-    { _id: id, processedAt: { $exists: false }, claimedAt: { $exists: false } },
-    { $set: { claimedAt: new Date() } },
-    { returnDocument: "after" },
-  );
-  if (!u?._id) return;
+/** Claim this call's unprocessed utterances (atomically, by token) and handle them as one batch. Returns false when none. */
+async function processPending(callId: string): Promise<boolean> {
+  const ids = (await c.utterances.find({ callId, processedAt: { $exists: false }, claimedAt: { $exists: false } }, { projection: { _id: 1 } })
+    .sort({ seq: 1 }).limit(MAX_BATCH).toArray()).map((d) => d._id);
+  if (!ids.length) return false;
+  const claimToken = randomUUID();
+  await c.utterances.updateMany({ _id: { $in: ids }, processedAt: { $exists: false }, claimedAt: { $exists: false } }, { $set: { claimedAt: new Date(), claimToken } });
+  const batch = (await c.utterances.find({ claimToken }).sort({ seq: 1 }).toArray()) as Stored[];
+  if (!batch.length) return true;
   try {
-    await handleUtterance(ctx, u as Utterance & { _id: ObjectId });
-    await c.utterances.updateOne({ _id: id }, { $set: { processedAt: new Date() } });
+    await handleBatch(ctx, batch);
+    await c.utterances.updateMany({ claimToken }, { $set: { processedAt: new Date() } });
   } catch (e) {
-    console.error(`[agent] utterance ${id} failed:`, e);
-    await c.utterances.updateOne({ _id: id }, { $set: { processedAt: new Date(), error: String(e instanceof Error ? e.message : e) } });
+    console.error(`[agent] batch of ${batch.length} in ${callId} failed:`, e);
+    await c.utterances.updateMany({ claimToken }, { $set: { processedAt: new Date(), error: String(e instanceof Error ? e.message : e) } });
   }
+  return true;
 }
 
 async function catchUp(): Promise<void> {
   const stale = new Date(Date.now() - 120_000);
-  const pending = await c.utterances
-    .find({ teamId: config.teamId, projectId: config.projectId, processedAt: { $exists: false }, $or: [{ claimedAt: { $exists: false } }, { claimedAt: { $lt: stale } }] })
-    .sort({ receivedAt: 1 }).limit(50).toArray();
-  for (const u of pending) {
-    if (u.claimedAt) await c.utterances.updateOne({ _id: u._id, claimedAt: u.claimedAt }, { $unset: { claimedAt: "" } });
-    void enqueue(u as Utterance & { _id: ObjectId });
-  }
+  await c.utterances.updateMany(
+    { teamId: config.teamId, projectId: config.projectId, processedAt: { $exists: false }, claimedAt: { $lt: stale } },
+    { $unset: { claimedAt: "", claimToken: "" } },
+  );
+  const calls = await c.utterances.distinct("callId", { teamId: config.teamId, projectId: config.projectId, processedAt: { $exists: false } });
+  for (const callId of calls) schedule(callId);
 }
 
 async function watchUtterances(): Promise<void> {
@@ -68,7 +77,7 @@ async function watchUtterances(): Promise<void> {
   console.log(`[stream] watching utterances${saved ? " (resumed from stored token)" : ""}`);
   for await (const ev of stream) {
     if (ev.operationType !== "insert") continue;
-    void enqueue(ev.fullDocument as Utterance & { _id: ObjectId });
+    schedule(ev.fullDocument.callId);
     await c.streamOffsets.updateOne({ _id: STREAM_ID }, { $set: { token: ev._id, at: new Date() } }, { upsert: true });
   }
 }

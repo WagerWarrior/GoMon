@@ -50,20 +50,22 @@ const SCHEMA = {
 } as const;
 
 function system(name: string): string {
-  return `You are ${name}, an AI participant in a live engineering design call. You read one new committed utterance at a time.
+  return `You are ${name}, an AI participant in a live engineering design call. You read the newest committed utterances (one or more).
+Transcripts come from live speech-to-text: often lowercase, unpunctuated, and split mid-thought across utterances. Read them together.
 Return JSON only, matching the schema. Be conservative and BRIEF (latency matters): an empty result is correct for small talk and filler.
 
 Rules:
-- addressed: true only if the utterance speaks to you by name. Speech-to-text may misspell your name ("go mon", "gamon", "gomen", "gommon").
+- addressed: true if a new utterance speaks to you by name. Speech-to-text never spells your name right ("goman", "gourmand", "so man",
+  "go on", "no man"); WAKE lines list utterances a sound-alike matcher already flagged as addressed to you.
 - reply: if addressed, a short spoken answer (max 35 words, no markdown, no lists). Ground it ONLY in the provided memories and
   call items and cite memory keys like "R-12" when you use them. If the memories do not contain the answer, say so. Empty if not addressed.
-- newItems: high-level design content stated in THIS utterance (decision proposals, requirements, constraints, risks, open questions,
+- newItems: high-level design content stated in the NEW utterances (decision proposals, requirements, constraints, risks, open questions,
   action items with owner, assumptions, interfaces, alternatives). Max 3 items, each max 25 words, self-contained. A single proposal
   with several parts is ONE decision item that summarizes all parts. Do not repeat an existing open item. Never low-level detail.
 - conflicts: for each new item ("new:<index>") or open item (its id) that contradicts a memory, give memoryId and a note (max 25
   words, spoken aloud) naming the memory key and the specific clash. kind "already_decided" when the team re-debates something a
   memory already settles. severity "high" only for direct contradictions of a decision or customer requirement.
-- agreement: when this utterance expresses team agreement with proposed item(s) ("let's do that", "agreed", "sounds good, ship it"),
+- agreement: when a new utterance expresses team agreement with proposed item(s) ("let's do that", "agreed", "sounds good, ship it"),
   itemRefs = those items ("new:<index>" or ids; usually the latest proposal) and agreedBy = speakers who agreed. Otherwise [] and [].
 - objection: true if the speaker pushes back on something being locked ("wait", "no", "hold on", "not yet").
 - command: only when the speaker explicitly asks you: "lock it in" -> lock_item (itemRef); "create the tickets" -> create_tickets;
@@ -72,27 +74,28 @@ Rules:
 - suggestion: only a strong, specific alternative design (max 30 words) that the memories support and nobody has raised; usually empty.`;
 }
 
-function user(recent: TurnLine[], current: TurnLine, items: OpenItem[], memories: MemoryLine[]): string {
+function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[]): string {
   const fmt = (l: TurnLine) => `[${l.id}] ${l.speaker}: ${l.text}`;
   return [
-    "MEMORIES (canonical team memory, retrieved for this utterance):",
+    "MEMORIES (canonical team memory, retrieved for these utterances):",
     memories.length ? memories.map((m) => `- id=${m.id} key=${m.key ?? "-"} kind=${m.kind}: ${m.text}`).join("\n") : "(none)",
     "",
     "OPEN CALL ITEMS:",
     items.length ? items.map((i) => `- id=${i.id} [${i.status}] ${i.kind}: ${i.text}`).join("\n") : "(none)",
     "",
-    "RECENT TURNS:",
+    "RECENT TURNS (already processed):",
     recent.length ? recent.map(fmt).join("\n") : "(start of call)",
     "",
-    "NEW UTTERANCE:",
-    fmt(current),
+    "NEW UTTERANCES:",
+    batch.map(fmt).join("\n"),
+    ...(wake.length ? ["", "WAKE (addressed to you):", ...wake.map((w) => `- [${w.id}] heard as "${w.heardAs}"`)] : []),
   ].join("\n");
 }
 
 type MessagesResponse = { content?: { type: string; text?: string }[]; stop_reason?: string; error?: { message: string }; usage?: unknown };
 
 export const analyze = traceable(
-  async (recent: TurnLine[], current: TurnLine, items: OpenItem[], memories: MemoryLine[]): Promise<Analysis> => {
+  async (recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[]): Promise<Analysis> => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": config.llmKey(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -100,7 +103,7 @@ export const analyze = traceable(
         model: config.analyzeModel,
         max_tokens: 2048,
         system: system(config.agentName),
-        messages: [{ role: "user", content: user(recent, current, items, memories) }],
+        messages: [{ role: "user", content: user(recent, batch, items, memories, wake) }],
         output_config: { format: { type: "json_schema", schema: SCHEMA } },
       }),
     });

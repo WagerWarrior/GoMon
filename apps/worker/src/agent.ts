@@ -6,6 +6,9 @@ import { correctMemory, enqueueForCall, forgetMemory, oid, PolicyDenied, promote
 import { analyze, type Analysis } from "./llm.ts";
 import { retrieve, type Retrieved } from "./retrieve.ts";
 import type { CallItem, Say, Utterance } from "./shapes.ts";
+import { parseWake } from "./wake.ts";
+
+export type Stored = Utterance & { _id: ObjectId };
 
 const RECENT_TURNS = 8;
 
@@ -28,32 +31,41 @@ function resolveRef(ref: string, created: ObjectId[], open: CallItem[]): ObjectI
 }
 
 /**
- * One committed utterance: retrieve governed memory (unless memory is turned off for this call, the A/B proof), run one
- * structured analysis, then write call items, conflicts, consensus state and spoken responses back to Atlas.
+ * The pending committed utterances of one call (Recall sends one per sentence, faster than one analysis takes), handled as one
+ * batch: retrieve governed memory (unless memory is off for this call, the A/B proof), run one structured analysis, then write
+ * call items, conflicts, consensus state and spoken responses back to Atlas.
  */
-export const handleUtterance = traceable(async (ctx: Ctx, u: Utterance & { _id: ObjectId }): Promise<void> => {
+export const handleBatch = traceable(async (ctx: Ctx, batch: Stored[]): Promise<void> => {
   const t0 = Date.now();
+  const u = batch[batch.length - 1];
+  const first = batch[0];
   const call = await ctx.c.calls.findOne({ _id: u.callId as never });
   const memoryEnabled = call?.memoryEnabled !== false;
 
   const [recentDesc, open] = await Promise.all([
-    ctx.c.utterances.find({ callId: u.callId, seq: { $lt: u.seq } }).sort({ seq: -1 }).limit(RECENT_TURNS).toArray(),
+    ctx.c.utterances.find({ callId: u.callId, seq: { $lt: first.seq } }).sort({ seq: -1 }).limit(RECENT_TURNS).toArray(),
     ctx.c.callItems.find({ callId: u.callId, status: { $in: ["proposed", "locking"] } }).sort({ createdAt: -1 }).limit(20).toArray(),
   ]);
 
+  // Sound-alike wake detection (ASR never spells "Gomon"); the addressed utterance's speaker is the command actor.
+  const wakes = batch.map((b) => ({ b, w: parseWake(b.text) })).filter((x) => x.w.addressed);
+  const speaker = (wakes[wakes.length - 1]?.b ?? u).speaker.displayName;
+
   const tR = Date.now();
-  const memories: Retrieved[] = memoryEnabled ? await retrieve(ctx.c, ctx, u.text) : [];
+  const query = batch.map((b) => b.text).join(" ").slice(-600);
+  const memories: Retrieved[] = memoryEnabled ? await retrieve(ctx.c, ctx, query) : [];
   const retrieveMs = Date.now() - tR;
 
   const tA = Date.now();
   const a: Analysis = await analyze(
     recentDesc.reverse().map((r) => ({ id: String(r._id), speaker: r.speaker.displayName, text: r.text })),
-    { id: String(u._id), speaker: u.speaker.displayName, text: u.text },
+    batch.map((b) => ({ id: String(b._id), speaker: b.speaker.displayName, text: b.text })),
     open.map((i) => ({ id: String(i._id), kind: i.kind, text: i.text, status: i.status })),
     memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text })),
+    wakes.map((x) => ({ id: String(x.b._id), heardAs: x.w.heardAs ?? "" })),
   );
+  if (wakes.length) a.addressed = true;
   const analyzeMs = Date.now() - tA;
-  const speaker = u.speaker.displayName;
   const now = new Date();
 
   // 1. New scratch items (TTL-expiring until promoted).
@@ -61,25 +73,31 @@ export const handleUtterance = traceable(async (ctx: Ctx, u: Utterance & { _id: 
   for (const it of a.newItems) {
     const r = await ctx.c.callItems.insertOne({
       callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, kind: it.kind, text: it.text, status: "proposed",
-      sourceUtteranceIds: [u._id], createdAt: now, updatedAt: now, expiresAt: new Date(now.getTime() + config.scratchTtlMs),
+      sourceUtteranceIds: batch.map((b) => b._id), createdAt: now, updatedAt: now, expiresAt: new Date(now.getTime() + config.scratchTtlMs),
     });
     created.push(r.insertedId);
   }
   const firstItemMs = Date.now() - t0;
 
-  // 2. Conflicts and already-decided checks against canonical memory. Speak only high severity, once per window.
-  for (const cf of a.conflicts) {
+  // 2. Conflicts and already-decided checks against canonical memory. All are recorded for the dashboard; at most ONE is spoken
+  //    per batch (high severity, not spoken in the last window, and not when Gomon is about to answer a direct question).
+  let spokeConflict = a.addressed;
+  const ordered = [...a.conflicts].sort((x, y) => (x.kind === "conflict" ? 0 : 1) - (y.kind === "conflict" ? 0 : 1));
+  for (const cf of ordered) {
     const itemId = resolveRef(cf.itemRef, created, open);
     const mem = memories.find((m) => String(m._id) === cf.memoryId);
     if (!itemId || !mem) continue;
     const recentSpoken = await ctx.c.conflicts.findOne({ callId: u.callId, memoryId: mem._id, spoken: true, createdAt: { $gte: new Date(Date.now() - config.conflictRepeatMs) } });
-    const speak = cf.severity === "high" && !recentSpoken;
+    const speak = cf.severity === "high" && !recentSpoken && !spokeConflict;
     const ins = await ctx.c.conflicts.updateOne(
       { callId: u.callId, itemId, memoryId: mem._id },
       { $setOnInsert: { callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, itemId, memoryId: mem._id, memoryKey: mem.key, severity: cf.severity, kind: cf.kind, spoken: speak, note: cf.note, createdAt: now } },
       { upsert: true },
     );
-    if (ins.upsertedCount && speak) await say(ctx, u.callId, cf.note, cf.kind === "conflict" ? "conflict" : "already_decided", "high", u._id);
+    if (ins.upsertedCount && speak) {
+      spokeConflict = true;
+      await say(ctx, u.callId, cf.note, cf.kind === "conflict" ? "conflict" : "already_decided", "high", u._id);
+    }
   }
 
   // 3. Objection cancels any lock in its veto window.
@@ -141,16 +159,17 @@ export const handleUtterance = traceable(async (ctx: Ctx, u: Utterance & { _id: 
   const totalMs = Date.now() - t0;
   await Promise.all([
     ctx.c.agentEvents.insertOne({
-      callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, memoryEnabled,
+      callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, utteranceIds: batch.map((b) => b._id),
+      batchSize: batch.length, wake: wakes.map((x) => x.w.heardAs), memoryEnabled,
       retrievedMemoryIds: memories.map((m) => m._id), retrievedKeys: memories.map((m) => m.key), analysis: a, model: config.analyzeModel,
     }),
-    timing(ctx, u.callId, "queue", t0 - u.receivedAt.getTime(), u._id),
+    timing(ctx, u.callId, "queue", t0 - first.receivedAt.getTime(), u._id),
     timing(ctx, u.callId, "retrieve", retrieveMs, u._id),
     timing(ctx, u.callId, "analyze", analyzeMs, u._id),
-    created.length ? timing(ctx, u.callId, "utterance_to_item", firstItemMs + (t0 - u.receivedAt.getTime()), u._id) : Promise.resolve(),
+    created.length ? timing(ctx, u.callId, "utterance_to_item", firstItemMs + (t0 - first.receivedAt.getTime()), u._id) : Promise.resolve(),
     timing(ctx, u.callId, "total", totalMs, u._id),
   ]);
-}, { name: "gomon.handleUtterance", run_type: "chain" });
+}, { name: "gomon.handleBatch", run_type: "chain" });
 
 /** Promote items whose veto window elapsed. Runs on a timer, so a worker restart never strands a lock. */
 export async function sweepLocks(ctx: Ctx): Promise<void> {
