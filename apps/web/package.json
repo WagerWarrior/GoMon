@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "seed:dev": "tsx dev/seed.mts",
-    "sim": "tsx dev/sim.mts"
+    "sim": "tsx dev/sim.mts",
+    "demo": "next build && next start -p 3000"
   },
   "dependencies": {
     "mermaid": "^11.0.0",

@@ -3,7 +3,7 @@
  * Everything reads Atlas directly (source of truth) and returns plain JSON. Env values are never returned, only whether they are set.
  */
 import type { Db } from "mongodb";
-import { db, dbName, scope } from "./db";
+import { cached, db, dbName, scope } from "./db";
 import { stageStats } from "./stats";
 
 const plain = <T>(v: unknown): T => JSON.parse(JSON.stringify(v));
@@ -19,7 +19,8 @@ async function counts(d: Db, coll: string, match: object, extra: object = {}) {
   return new Map(rows.map((r) => [String(r._id), r]));
 }
 
-export async function sessions(limit = 200): Promise<SessionRow[]> {
+export function sessions(limit = 200): Promise<SessionRow[]> { return cached(`sessions:${limit}`, 2000, () => loadSessions(limit)); }
+async function loadSessions(limit: number): Promise<SessionRow[]> {
   const d = await db(); const { teamId, projectId } = scope(); const tp = { teamId, projectId };
   const [calls, utt, items, says, acts] = await Promise.all([
     d.collection("calls").find(tp).sort({ startedAt: -1 }).limit(limit).toArray(),
@@ -76,7 +77,8 @@ export async function session(callId: string) {
 }
 
 export interface Bucket { t: string; n: number }
-export async function overview() {
+export function overview() { return cached("overview", 2000, loadOverview); }
+async function loadOverview() {
   const d = await db(); const { teamId, projectId } = scope(); const tp = { teamId, projectId };
   const [rows, itemStatus, memKinds, memStatus, actionStatus, timings, uttTimes, says, audit] = await Promise.all([
     sessions(),
@@ -84,7 +86,7 @@ export async function overview() {
     d.collection("memories").aggregate([{ $match: { ...tp, status: { $ne: "forgotten" } } }, { $group: { _id: "$kind", n: { $sum: 1 } } }, { $sort: { n: -1 } }]).toArray(),
     d.collection("memories").aggregate([{ $match: tp }, { $group: { _id: "$status", n: { $sum: 1 } } }]).toArray(),
     d.collection("actions").aggregate([{ $match: tp }, { $group: { _id: "$status", n: { $sum: 1 } } }]).toArray(),
-    d.collection("timings").find(tp, { projection: { stage: 1, ms: 1, at: 1 } }).sort({ at: -1 }).limit(3000).toArray(),
+    d.collection("timings").find(tp, { projection: { stage: 1, ms: 1, at: 1 } }).sort({ _id: -1 }).limit(3000).toArray(),
     d.collection("utterances").find(tp, { projection: { startedAt: 1, receivedAt: 1 } }).sort({ _id: -1 }).limit(5000).toArray(),
     d.collection("says").countDocuments(tp),
     d.collection("audit_events").countDocuments(tp),
@@ -123,7 +125,8 @@ export async function overview() {
 }
 
 export interface ActivityRow { at: string; kind: string; actor: string; text: string; callId?: string; tone?: "good" | "bad" | "warn" }
-export async function activity(limit = 300, callId?: string): Promise<ActivityRow[]> {
+export function activity(limit = 300, callId?: string): Promise<ActivityRow[]> { return cached(`activity:${limit}:${callId ?? ""}`, 2000, () => loadActivity(limit, callId)); }
+async function loadActivity(limit: number, callId?: string): Promise<ActivityRow[]> {
   const d = await db(); const { teamId, projectId } = scope(); const q: any = callId ? { callId } : { teamId, projectId };
   const [audit, says, acts, runs, conflicts] = await Promise.all([
     d.collection("audit_events").find(q).sort({ at: -1 }).limit(limit).toArray(),
@@ -177,7 +180,8 @@ export function system() {
   };
 }
 
-export async function database() {
+export function database() { return cached("database", 15000, loadDatabase); }
+async function loadDatabase() {
   const d = await db();
   const cols = (await d.listCollections().toArray()).map((c) => c.name).filter((n) => !n.startsWith("system.")).sort();
   const rows = await Promise.all(cols.map(async (name) => {

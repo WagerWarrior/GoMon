@@ -6,7 +6,7 @@
  */
 import { ObjectId, type Db } from "mongodb";
 import { randomUUID } from "node:crypto";
-import { db, scope } from "./db";
+import { cached, db, scope } from "./db";
 
 export type Verb = "LISTEN" | "WAKE" | "SEARCH" | "THINK" | "APPEND" | "FLAG" | "LOCK" | "VETO" | "SPEAK" | "SEND" | "OPERATOR";
 export interface Op { id: string; at: string; verb: Verb; node: NodeId; edges: EdgeId[]; coll: string; rw: "read" | "write"; text: string; who?: string; ms?: number }
@@ -28,7 +28,8 @@ export async function focusCall(d: Db, want?: string) {
   return c ? String(c._id) : null;
 }
 
-export async function mission(want?: string) {
+export function mission(want?: string) { return cached(`mission:${want ?? ""}`, 1000, () => loadMission(want), 5000); }
+async function loadMission(want?: string) {
   const d = await db(); const { teamId, projectId } = scope();
   const callId = await focusCall(d, want);
   const calls = await d.collection("calls").find({ teamId, projectId }).sort({ startedAt: -1 }).limit(12).project({ title: 1, status: 1, startedAt: 1, participants: 1, memoryEnabled: 1 }).toArray();
