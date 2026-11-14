@@ -70,7 +70,7 @@ export default function SessionBar({ callId, tab, initialOps }: { callId: string
 export function CategoryPicker({ callId, current }: { callId: string; current: string }) {
   const router = useRouter(); const [v, setV] = useState(current); const [busy, setBusy] = useState(false);
   return (
-    <label className="sb-cat"><span className="muted small">Category</span>
+    <label className="sb-cat" title="Category">
       <select value={v} disabled={busy} onChange={async (e) => {
         const next = e.target.value; setV(next); setBusy(true);
         await fetch(`/api/sessions/${encodeURIComponent(callId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ category: next }) });

@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { collection } from "@/lib/platform";
+import { collection, findDoc } from "@/lib/platform";
 import { USED_BY } from "@/lib/dbmap";
 import DocTable from "@/components/platform/DocTable";
 export const dynamic = "force-dynamic";
 
-export default async function CollectionPage({ params }: { params: Promise<{ name: string }> }) {
-  const name = decodeURIComponent((await params).name);
-  const c = await collection(name); const u = USED_BY[name];
+export default async function CollectionPage({ params, searchParams }: { params: Promise<{ name: string }>; searchParams: Promise<{ id?: string; key?: string }> }) {
+  const name = decodeURIComponent((await params).name); const sp = await searchParams;
+  const [c, focus] = await Promise.all([collection(name), findDoc(name, sp.id, sp.key)]); const u = USED_BY[name];
   const cols = c.fields.filter((f: any) => f.name !== "_id" && f.presence >= 50).slice(0, 6).map((f: any) => f.name);
   return (
     <>
@@ -39,7 +39,7 @@ export default async function CollectionPage({ params }: { params: Promise<{ nam
       </section>
       <section className="p-card p-flush">
         <div className="p-card-h mx-pad"><h2>Latest documents</h2><span className="muted small">click a row to preview</span></div>
-        <DocTable name={name} docs={c.docs} cols={cols} />
+        <DocTable name={name} docs={focus && !c.docs.some((x: any) => String(x._id) === String(focus._id)) ? [focus, ...c.docs] : c.docs} cols={cols} initial={focus} />
       </section>
     </>
   );

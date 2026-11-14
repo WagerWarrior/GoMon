@@ -83,9 +83,9 @@ async function loadMission(want?: string) {
     participants: [...new Set<string>([...(call?.participants ?? []), ...utt.map((u) => u.speaker?.displayName).filter((n) => n && n !== "Gomon" && n !== "Mission control")])],
     startedAt: iso(call?.startedAt, null) ?? iso(null, utt[utt.length - 1]?._id),
     heard: utt.slice(0, 6).reverse().map((u) => ({ who: u.speaker?.displayName ?? "?", text: cut(u.text, 200), at: iso(u.receivedAt, u._id) })),
-    recalled: recalled.map((m) => ({ key: m.key ?? null, kind: m.kind, text: cut(m.text, 180), status: m.status })),
+    recalled: recalled.map((m) => ({ id: String(m._id), key: m.key ?? null, kind: m.kind, text: cut(m.text, 180), status: m.status })),
     open: items.filter((i) => i.status === "proposed" || i.status === "locking").slice(0, 6).map((i) => ({ kind: i.kind, text: cut(i.text, 160), status: i.status, lockAnnouncedAt: iso(i.lockAnnouncedAt, null), vetoMs: i.vetoMs ?? 10000 })),
-    lastRun: lastRun ? { at: iso(lastRun.at, lastRun._id), wake: !!lastRun.wake, batch: lastRun.batchSize ?? 1, recalled: (lastRun.retrievedMemoryIds ?? []).length } : null,
+    lastRun: lastRun ? { at: iso(lastRun.at, lastRun._id), wake: Array.isArray(lastRun.wake) ? lastRun.wake.length > 0 : !!lastRun.wake, model: lastRun.model ?? null, batch: lastRun.batchSize ?? 1, recalled: (lastRun.retrievedMemoryIds ?? []).length } : null,
     lastSay: says[0] ? { text: says[0].text, status: says[0].status, at: iso(says[0].createdAt, says[0]._id) } : null,
   };
   return JSON.parse(JSON.stringify({ now: new Date().toISOString(), callId, calls, ops: ops.slice(0, 80), context }));

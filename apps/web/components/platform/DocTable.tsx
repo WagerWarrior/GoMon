@@ -12,8 +12,8 @@ function Value({ v, depth = 0 }: { v: unknown; depth?: number }) {
   return <span className={typeof v === "string" ? "" : "mono"}>{String(v)}</span>;
 }
 
-export default function DocTable({ name, docs, cols }: { name: string; docs: any[]; cols: string[] }) {
-  const [sel, setSel] = useState<any | null>(null); const [copied, setCopied] = useState(false);
+export default function DocTable({ name, docs, cols, initial }: { name: string; docs: any[]; cols: string[]; initial?: any }) {
+  const [sel, setSel] = useState<any | null>(initial ?? null); const [copied, setCopied] = useState(false);
   const callId = sel ? (name === "calls" ? String(sel._id) : sel.callId) : null;
   return (
     <div className={`dt ${sel ? "open" : ""}`}>

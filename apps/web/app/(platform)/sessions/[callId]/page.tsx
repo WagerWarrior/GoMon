@@ -10,7 +10,7 @@ import FlowDiagram from "@/components/platform/FlowDiagram";
 import { CategoryPicker } from "@/components/platform/SessionBar";
 import AutoRefresh from "@/components/platform/AutoRefresh";
 import { bursts, collapse } from "@/lib/group";
-import { clock, dur, initials, when } from "@/lib/format";
+import { clock, dur, when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 /** One session, two views: Live (the chat, with Gomon's reasoning beside it) and Activity (everything it did, bundled). */
@@ -24,17 +24,14 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
   const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
   return (
     <div className="ss">
-      <header className="ss-head">
-        <div className="ss-title">
-          <span className="eyebrow"><Link href="/sessions">Sessions</Link> · {when(s.call.startedAt)} · {dur(s.row?.durationMs)}</span>
+      <header className="ss-bar">
+        <Link href="/sessions" className="ss-back" aria-label="All sessions">←</Link>
+        <div className="ss-name">
           <h1>{s.call.title || "Design call"}</h1>
-          <div className="p-people">{(meta?.team ?? s.row?.participants ?? []).map((p: string) => <span key={p} className="p-person"><i>{initials(p)}</i>{p}</span>)}{(meta?.guests ?? []).map((p: string) => <span key={p} className="p-person guest" title="Not a team member"><i>{initials(p)}</i>{p}<em>guest</em></span>)}</div>
+          <span className="ss-meta"><span className={`ss-state s-${meta?.state ?? "ended"}`}><i />{meta?.state === "live" ? "Live" : meta?.state === "failed" ? "Failed" : "Ended"}</span>{when(s.call.startedAt)} · {dur(s.row?.durationMs)} · {[...(meta?.team ?? s.row?.participants ?? [])].join(", ")}{(meta?.guests ?? []).length ? ` + ${meta!.guests.join(", ")} (guest)` : ""}</span>
         </div>
-        <div className="ss-right">
-          <span className={`pill ${meta?.state === "live" ? "good" : meta?.state === "failed" ? "bad" : ""}`}>{meta?.state ?? s.call.status}</span>
-          <CategoryPicker callId={callId} current={meta?.category ?? "Design review"} />
-          <nav className="ss-tabs"><Link href={href("live")} aria-current={tab === "live" ? "page" : undefined}>Live</Link><Link href={href("activity")} aria-current={tab === "activity" ? "page" : undefined}>Activity</Link></nav>
-        </div>
+        <CategoryPicker callId={callId} current={meta?.category ?? "Design review"} />
+        <nav className="ss-tabs"><Link href={href("live")} aria-current={tab === "live" ? "page" : undefined}>Live</Link><Link href={href("activity")} aria-current={tab === "activity" ? "page" : undefined}>Activity</Link></nav>
       </header>
       {tab === "live"
         ? <SessionChat callId={callId} initialEntries={buildTimeline(s).slice(-400)} initialOps={m.ops} initialContext={m.context} />

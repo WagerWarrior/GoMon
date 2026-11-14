@@ -28,3 +28,14 @@ test("decisions, locks, vetoes, conflicts and sends become inline events in time
   assert.deepEqual(t.map((e: any) => e.kind), ["save", "lock", "lock", "flag", "send"]);
   assert.equal((t[0] as any).status, "locked"); assert.equal((t[2] as any).veto, true); assert.equal((t[4] as any).tool, "Slack");
 });
+
+test("a run carries its trace: recalled keys, stage latency joined by utterance, and what it decided; an empty wake list is not a wake", () => {
+  const t = buildTimeline({ ...base,
+    runs: [{ _id: 1, at: at(0), utteranceId: "u1", wake: [], model: "m", retrievedKeys: ["D-1"], retrievedMemoryIds: ["x"], analysis: { addressed: true, reply: "ok", newItems: [{}], conflicts: [], command: { type: "none" } } }],
+    timings: [{ utteranceId: "u1", stage: "analyze", ms: 2100 }, { utteranceId: "u1", stage: "total", ms: 2900 }, { utteranceId: "other", stage: "total", ms: 1 }] });
+  const e: any = t[0];
+  assert.equal(e.wake, false);
+  assert.deepEqual(e.runs[0].keys, ["D-1"]);
+  assert.deepEqual(e.runs[0].ms, { analyze: 2100, total: 2900 });
+  assert.equal(e.runs[0].did, "answered, replied, saved 1");
+});

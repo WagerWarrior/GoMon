@@ -8,15 +8,25 @@ import { toolName } from "./workflows";
 
 export type Entry =
   | { kind: "msg"; id: string; at: string; who: string; side: "left" | "right"; text: string; via?: string; status?: string }
-  | { kind: "think"; id: string; at: string; n: number; hits: number; wake: boolean }
+  | { kind: "think"; id: string; at: string; n: number; hits: number; wake: boolean; runs: Run[] }
   | { kind: "save"; id: string; at: string; item: string; text: string; status: string }
   | { kind: "lock"; id: string; at: string; who: string; text: string; veto: boolean }
   | { kind: "flag"; id: string; at: string; text: string }
   | { kind: "send"; id: string; at: string; tool: string; status: string; text: string; url?: string | null };
 
+/** One agent run with its trace: what it recalled (links into the database), how long each stage took, what it decided. */
+export interface Run { at: string; model?: string; keys: string[]; ids: string[]; ms: Record<string, number>; did: string }
+const isWake = (w: unknown) => (Array.isArray(w) ? w.length > 0 : !!w);
+function didOf(a: any): string {
+  if (!a) return "no analysis";
+  const parts = [a.addressed && "answered", a.reply && "replied", a.newItems?.length && `saved ${a.newItems.length}`, a.conflicts?.length && `flagged ${a.conflicts.length}`, a.command?.type && a.command.type !== "none" && a.command.type.replace(/_/g, " "), a.suggestion && "suggested"].filter(Boolean);
+  return parts.length ? parts.join(", ") : "listened, nothing to do";
+}
 const iso = (t: unknown) => { const d = t ? new Date(t as string) : null; return d && !isNaN(+d) ? d.toISOString() : null; };
 
-export function buildTimeline(s: { utterances: any[]; says: any[]; runs: any[]; items: any[]; audit: any[]; conflicts: any[]; actions: any[] }): Entry[] {
+export function buildTimeline(s: { utterances: any[]; says: any[]; runs: any[]; items: any[]; audit: any[]; conflicts: any[]; actions: any[]; timings?: any[] }): Entry[] {
+  const tim = new Map<string, Record<string, number>>();
+  for (const t of s.timings ?? []) if (t.utteranceId) { const k = String(t.utteranceId); (tim.get(k) ?? tim.set(k, {}).get(k)!)[t.stage] = t.ms; }
   const out: Entry[] = [];
   type Draft = Entry extends infer E ? (E extends Entry ? Omit<E, "at"> & { at: string | null } : never) : never;
   const add = (e: Draft) => { if (e.at) out.push(e as Entry); };
@@ -26,7 +36,11 @@ export function buildTimeline(s: { utterances: any[]; says: any[]; runs: any[]; 
     add({ kind: "msg", id: `u${u._id}`, at: iso(u.startedAt ?? u.receivedAt), who, side: who === "Mission control" ? "right" : "left", text: u.text ?? "", via: u.source });
   }
   for (const x of s.says) add({ kind: "msg", id: `s${x._id}`, at: iso(x.createdAt), who: "Gomon", side: "right", text: x.text ?? "", via: x.reason === "operator" ? "operator" : "voice", status: x.status });
-  for (const r of s.runs) add({ kind: "think", id: `r${r._id}`, at: iso(r.at), n: 1, hits: (r.retrievedMemoryIds ?? []).length, wake: !!r.wake });
+  for (const r of s.runs) {
+    const at = iso(r.at); if (!at) continue;
+    const run: Run = { at, model: r.model, keys: (r.retrievedKeys ?? []).map(String), ids: (r.retrievedMemoryIds ?? []).map(String), ms: tim.get(String(r.utteranceId ?? "")) ?? {}, did: didOf(r.analysis) };
+    add({ kind: "think", id: `r${r._id}`, at, n: 1, hits: run.ids.length, wake: isWake(r.wake), runs: [run] });
+  }
   for (const i of s.items) add({ kind: "save", id: `i${i._id}`, at: iso(i.createdAt), item: String(i.kind ?? "note").replace(/_/g, " "), text: i.text ?? "", status: i.status === "promoted" ? "locked" : i.status === "rejected" ? "vetoed" : i.status ?? "" });
   for (const a of s.audit) {
     const t = String(a.type ?? "");
@@ -40,8 +54,8 @@ export function buildTimeline(s: { utterances: any[]; says: any[]; runs: any[]; 
   const folded: Entry[] = [];
   for (const e of out) {
     const prev = folded[folded.length - 1];
-    if (e.kind === "think" && prev?.kind === "think") { prev.n += 1; prev.hits += e.hits; prev.wake ||= e.wake; prev.at = e.at; }
-    else folded.push(e.kind === "think" ? { ...e } : e);
+    if (e.kind === "think" && prev?.kind === "think") { prev.n += 1; prev.hits += e.hits; prev.wake ||= e.wake; prev.at = e.at; prev.runs = [...prev.runs, ...e.runs]; }
+    else folded.push(e.kind === "think" ? { ...e, runs: [...e.runs] } : e);
   }
   return folded;
 }

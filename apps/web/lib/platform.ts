@@ -257,6 +257,16 @@ export function collection(name: string) {
   });
 }
 
+/** One document by _id (ObjectId or string) or, for memories, by key. Used by links like /database/memories?id=... */
+export async function findDoc(name: string, id?: string, key?: string) {
+  if (!id && !key) return null;
+  const d = await db(); const c = d.collection(name);
+  const { ObjectId } = await import("mongodb");
+  const q: any = key ? { key } : ObjectId.isValid(id!) && id!.length === 24 ? { _id: new ObjectId(id!) } : { _id: id };
+  const doc = await c.find(q, { projection: { embedding: 0, token: 0 } }).sort({ version: -1, _id: -1 }).limit(1).next();
+  return doc ? plain<any>(doc) : null;
+}
+
 /** Setup checklist for Models & voice: which env keys each service needs and whether each is set (never the value). */
 export function setup() {
   const has = (k: string) => !!process.env[k];
