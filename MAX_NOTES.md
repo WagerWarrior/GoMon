@@ -49,6 +49,18 @@ Verified: worker typecheck 0, `npm test` 33/33 (`test/floor.test.ts`, `test/peop
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 
+## For Rob: pull and restart now (2026-11-14, latest)
+Everything from Max's lane is on main. A fresh checkout of main typechecks and passes the worker tests (33/33).
+**To run it:** `git pull && cd apps/worker && npm i && npm start` (the `npm i` matters: `sharp` draws the animated camera card).
+Since your last pull, in `apps/worker`:
+- **Chime** (`ears.ts`, `voice.ts`): plays the moment "Gomon" is in the live partial transcript, once per 4 s per call
+  (it used to wait for the committed sentence, and the mic and meeting channels could both fire it).
+- **Speed** (`fast.ts`, `voice.ts`, `agent.ts`, `context.ts`): answers render their voice as soon as the text exists; the
+  workspace read is cached 10 s per call; model and voice connections are kept open; three Atlas round trips removed.
+- **Camera card** (`card.ts`): animated dots, timer and lock countdown in the dashboard theme.
+**Please report from one live call:** does the chime sound once, right at the name? Does the card animate and return to Listening?
+None of this has been heard or seen in a live Meet from Max's machine (no Recall key here).
+
 ## For Rob: answer path measured call by call, three waits removed (2026-11-14)
 `cd apps/worker && npm run latency` times every call the fast lane makes (read-only, writes nothing). From Max's laptop:
 one Atlas round trip ~100 ms, hybrid memory search ~330 ms, knowledge search ~400 ms, all context in parallel 400-900 ms,
