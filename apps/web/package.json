@@ -1,0 +1,29 @@
+{
+  "name": "@gomon/web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Gomon workspace (Max): live panels, governance actions, Mermaid diagram, audit view",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "seed:dev": "tsx dev/seed.ts",
+    "sim": "tsx dev/sim.ts"
+  },
+  "dependencies": {
+    "mongodb": "^7.0.0",
+    "mermaid": "^11.0.0",
+    "next": "^15.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
