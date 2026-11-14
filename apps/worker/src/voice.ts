@@ -72,9 +72,16 @@ async function stopAudio(botId: string): Promise<void> {
   if (!res.ok) await playInMeeting(botId, SILENCE);
 }
 
-const botOf = async (c: Cols, callId: string) => {
+type Bot = { botId: string; teamId: string; projectId: string };
+/** A call's bot does not change while it is in the meeting: remembered for 30 s, so the chime and each line skip one Atlas round trip (~100 ms). */
+const bots = new Map<string, { at: number; bot: Bot }>();
+const botOf = async (c: Cols, callId: string): Promise<Bot> => {
+  const hit = bots.get(callId);
+  if (hit && Date.now() - hit.at < 30_000) return hit.bot;
   const call = await c.calls.findOne({ _id: callId as never }, { projection: { botId: 1, teamId: 1, projectId: 1 } });
-  return { botId: typeof call?.botId === "string" ? call.botId : "", teamId: String(call?.teamId ?? ""), projectId: String(call?.projectId ?? "") };
+  const bot = { botId: typeof call?.botId === "string" ? call.botId : "", teamId: String(call?.teamId ?? ""), projectId: String(call?.projectId ?? "") };
+  if (bot.botId) bots.set(callId, { at: Date.now(), bot });
+  return bot;
 };
 
 /**
@@ -106,12 +113,14 @@ export async function stopSpeaking(c: Cols, callId: string, why: string, heardTe
 export async function heard(c: Cols, callId: string, who: string): Promise<void> {
   const t0 = Date.now();
   await stopSpeaking(c, callId, "wake_word");
-  await c.calls.updateOne({ _id: callId as never }, { $set: { agentState: { state: "searching", detail: `heard ${who.split(" ")[0]}, checking team memory`, at: new Date() } } });
-  void showCard(c, callId, "thinking");
-  if (!voiceOn || process.env.HEARD_CHIME === "off") return;
+  // The state line is written while the chime goes out, not before it (one Atlas round trip less before the sound).
+  const state = c.calls
+    .updateOne({ _id: callId as never }, { $set: { agentState: { state: "searching", detail: `heard ${who.split(" ")[0]}, checking team memory`, at: new Date() } } })
+    .then(() => void showCard(c, callId, "thinking"));
+  if (!voiceOn || process.env.HEARD_CHIME === "off") return void (await state);
   const { botId, teamId, projectId } = await botOf(c, callId);
-  if (!botId) return;
-  await playInMeeting(botId, CHIME);
+  if (!botId) return void (await state);
+  await Promise.all([playInMeeting(botId, CHIME), state]);
   await c.timings.insertOne({ callId, teamId, projectId, stage: "wake_to_chime", ms: Date.now() - t0, at: new Date() });
 }
 
@@ -131,8 +140,7 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
     }
   };
   const speak = async (s: Say) => {
-    const call = await c.calls.findOne({ _id: s.callId as never }, { projection: { botId: 1 } });
-    const botId = typeof call?.botId === "string" ? call.botId : "";
+    const { botId } = await botOf(c, s.callId);
     if (!botId || wasCut(s)) return;
     if (UNPROMPTED.has(s.reason)) await floorFree(s.callId, s.createdAt);
     if (Date.now() - s.createdAt.getTime() > STALE_MS) {
@@ -144,11 +152,11 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
       const mp3 = await ttsMp3(s.text, s.voiceId);
       // The floor was taken back while this line was waiting or rendering: it is already marked cancelled.
       if (wasCut(s)) return;
-      await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "started", updatedAt: new Date() } });
       void showCard(c, s.callId, "speaking", { forMs: spokenMs(s.text) });
       const { promise: cutOff, resolve: cut } = Promise.withResolvers<void>();
       speakingNow.set(s.callId, { say: s, cut });
-      await playInMeeting(botId, mp3);
+      // The clip goes to the meeting while the row is marked started, not after it (~100 ms sooner).
+      await Promise.all([playInMeeting(botId, mp3), c.says.updateOne({ sayId: s.sayId, status: "queued" }, { $set: { status: "started", updatedAt: new Date() } })]);
       await c.timings.insertOne({ callId: s.callId, teamId: s.teamId, projectId: s.projectId, stage: "say_to_audio", ms: Date.now() - t0, at: new Date() });
       log(`[voice] ${s.reason} -> meeting (${Date.now() - t0} ms): ${s.text.slice(0, 70)}`);
       // Until the clip ends, or until a person takes the floor (stopSpeaking resolves cutOff and marks the line cancelled).

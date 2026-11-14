@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "inspect": "node --env-file=../../.env --import tsx scripts/inspect.ts",
-    "join": "node --env-file=../../.env --import tsx scripts/join.ts"
+    "join": "node --env-file=../../.env --import tsx scripts/join.ts",
+    "latency": "node --env-file=../../.env --import tsx scripts/latency.ts"
   },
   "dependencies": {
     "langsmith": "^0.12.0",

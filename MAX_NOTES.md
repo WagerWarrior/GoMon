@@ -26,6 +26,15 @@ Verified: worker typecheck 0, `npm test` 15/15 (new `test/floor.test.ts`, `test/
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 
+## For Rob: answer path measured call by call, three waits removed (2026-11-14)
+`cd apps/worker && npm run latency` times every call the fast lane makes (read-only, writes nothing). From Max's laptop:
+one Atlas round trip ~100 ms, hybrid memory search ~330 ms, knowledge search ~400 ms, all context in parallel 400-900 ms,
+Haiku reply 760-900 ms (first token is no earlier than the full reply at this length), ElevenLabs flash 530 ms.
+Removed, each one Atlas round trip (~100 ms) that sat in front of something: the call read before the searches (`fast.ts`),
+the bot lookup before the chime and before every line (cached 30 s), and the "started" write before the clip is sent (`voice.ts`).
+The chime now goes out while the state line is written. Order is unchanged: chime -> search -> model -> voice -> clip.
+**Restart the worker to pick it up. Not measured live:** no Recall key on Max's machine, and `timings` was empty (fresh reset).
+
 ## For Rob: Gomon's camera card is animated now (2026-11-14, 16:35)
 `apps/worker/src/card.ts` draws each frame (SVG -> JPEG with `sharp`) in the dashboard theme and pushes it through the same
 Recall Output Video call. Callers are unchanged (`showCard`). Thinking: three moving dots, a live timer and the `agentState.detail`

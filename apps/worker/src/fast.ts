@@ -30,16 +30,22 @@ export function wantsFastReply(text: string): boolean {
 export async function fastReply(ctx: Ctx, u: { _id: ObjectId; callId: string; seq: number; text: string; speaker: { displayName: string } }): Promise<void> {
   const t0 = Date.now();
   void showCard(ctx.c, u.callId, "thinking");
-  const call = await ctx.c.calls.findOne({ _id: u.callId as never }, { projection: { summary: 1, templateId: 1, memoryEnabled: 1 } });
-  const [recent, said, memories, workspace, tpl, knowledge] = await Promise.all([
+  // Everything is fetched at once. The call document used to be read first (one Atlas round trip, ~100 ms, before any search
+  // started); memory is on for nearly every call, so the searches start now and are dropped if this call has it off.
+  const callP = ctx.c.calls.findOne({ _id: u.callId as never }, { projection: { summary: 1, templateId: 1, memoryEnabled: 1 } });
+  const [call, recent, said, found, workspace, tpl, foundKnowledge] = await Promise.all([
+    callP,
     ctx.c.utterances.find({ callId: u.callId, seq: { $lt: u.seq } }).sort({ seq: -1 }).limit(8).toArray(),
     ctx.c.says.find({ callId: u.callId, reason: { $ne: "ack" } }).sort({ createdAt: -1 }).limit(4).toArray(),
-    call?.memoryEnabled === false ? Promise.resolve([]) : retrieve(ctx.c, ctx, u.text),
+    retrieve(ctx.c, ctx, u.text),
     workspaceFor(ctx, u.callId),
-    templateFor(ctx.c, ctx.teamId, call?.templateId),
+    callP.then((cl) => templateFor(ctx.c, ctx.teamId, cl?.templateId)),
     // Past meeting transcripts, summaries and ADRs by meaning (Atlas Automated Embedding, Voyage).
-    call?.memoryEnabled === false ? Promise.resolve([]) : searchKnowledge(ctx.c, ctx, u.text, u.callId),
+    searchKnowledge(ctx.c, ctx, u.text, u.callId),
   ]);
+  const memoryOn = call?.memoryEnabled !== false;
+  const memories = memoryOn ? found : [];
+  const knowledge = memoryOn ? foundKnowledge : [];
   // Gomon's own lines go into the turn history, so earlier questions read as already answered.
   const turns = [
     ...recent.map((r) => ({ at: r.receivedAt.getTime(), line: `${r.speaker.displayName}: ${r.text}` })),
