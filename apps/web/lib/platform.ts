@@ -12,6 +12,20 @@ const ms = (t: unknown) => (t ? new Date(t as string).getTime() : NaN);
 export interface SessionRow {
   id: string; title: string; status: string; participants: string[]; startedAt: string | null; durationMs: number | null;
   utterances: number; items: number; locked: number; says: number; actions: number; memoryEnabled: boolean;
+  lastAt: string | null; state: "live" | "ended" | "failed"; voice: boolean; team: string[]; guests: string[];
+  category: string; templateId: string; failedActions: number; unprocessed: number;
+}
+
+/** A session is live while anything happened in the last 5 minutes (calls are never closed explicitly). */
+export const LIVE_MS = 5 * 60_000;
+const TEMPLATE_CATEGORY: Record<string, string> = { "design-review": "Design review", "silent-scribe": "Notes only", "architecture-challenger": "Architecture" };
+export function categorize(c: { _id?: unknown; title?: string; category?: string; templateId?: string }) {
+  if (c.category) return c.category;
+  const t = `${c.title ?? ""}`.toLowerCase(); const id = String(c._id ?? "").toLowerCase();
+  if (/customer|client|acme|sales|demo/.test(t)) return "Customer call";
+  if (/standup|sync|retro|planning/.test(t)) return "Team sync";
+  if (/rehears|smoke|test|sim|^ab-|^tpl-|^gov-|workflow-test/.test(id) || /rehears|test/.test(t)) return "Test run";
+  return TEMPLATE_CATEGORY[c.templateId ?? ""] ?? "Design review";
 }
 
 async function counts(d: Db, coll: string, match: object, extra: object = {}) {
@@ -22,18 +36,27 @@ async function counts(d: Db, coll: string, match: object, extra: object = {}) {
 export function sessions(limit = 200): Promise<SessionRow[]> { return cached(`sessions:${limit}`, 2000, () => loadSessions(limit)); }
 async function loadSessions(limit: number): Promise<SessionRow[]> {
   const d = await db(); const { teamId, projectId } = scope(); const tp = { teamId, projectId };
-  const [calls, utt, items, says, acts] = await Promise.all([
+  const [calls, utt, items, says, acts, members] = await Promise.all([
     d.collection("calls").find(tp).sort({ startedAt: -1 }).limit(limit).toArray(),
-    counts(d, "utterances", tp, { first: { $min: { $ifNull: ["$startedAt", "$receivedAt"] } }, last: { $max: { $ifNull: ["$endedAt", { $ifNull: ["$receivedAt", "$startedAt"] }] } }, speakers: { $addToSet: "$speaker.displayName" } }),
+    counts(d, "utterances", tp, { first: { $min: { $ifNull: ["$startedAt", "$receivedAt"] } }, last: { $max: { $ifNull: ["$endedAt", { $ifNull: ["$receivedAt", "$startedAt"] }] } }, speakers: { $addToSet: "$speaker.displayName" }, recall: { $sum: { $cond: [{ $eq: ["$source", "recall"] }, 1, 0] } }, unprocessed: { $sum: { $cond: [{ $ifNull: ["$processedAt", false] }, 0, 1] } } }),
     counts(d, "call_items", tp, { locked: { $sum: { $cond: [{ $eq: ["$status", "promoted"] }, 1, 0] } } }),
-    counts(d, "says", tp),
-    counts(d, "actions", tp),
+    counts(d, "says", tp, { last: { $max: "$createdAt" } }),
+    counts(d, "actions", tp, { failed: { $sum: { $cond: [{ $in: ["$status", ["failed", "denied"]] }, 1, 0] } } }),
+    d.collection("members").find({ teamId }).project({ displayName: 1 }).toArray(),
   ]);
+  const team = new Set(members.map((m) => String(m.displayName).toLowerCase()));
+  const now = Date.now();
   return calls.map((c) => {
     const id = String(c._id); const u = utt.get(id);
     const start = Math.min(ms(c.startedAt), ms(u?.first)) || ms(c.startedAt); const end = ms(c.endedAt ?? u?.last);
-    const people = [...new Set<string>([...(c.participants ?? []), ...((u?.speakers ?? []) as string[]).filter((s) => s !== "Gomon")])];
+    const people = [...new Set<string>([...(c.participants ?? []), ...((u?.speakers ?? []) as string[]).filter((s) => s !== "Gomon")])].filter((p) => p !== "Mission control");
+    const lastAt = Math.max(ms(u?.last) || 0, ms(says.get(id)?.last) || 0, ms(c.startedAt) || 0);
+    const failedActions = acts.get(id)?.failed ?? 0;
+    const state: SessionRow["state"] = now - lastAt < LIVE_MS ? "live" : (u?.n ?? 0) === 0 || failedActions > 0 ? "failed" : "ended";
     return {
+      lastAt: lastAt ? new Date(lastAt).toISOString() : null, state, voice: (u?.recall ?? 0) > 0,
+      team: people.filter((p) => team.has(p.toLowerCase())), guests: people.filter((p) => !team.has(p.toLowerCase())),
+      category: categorize(c as any), templateId: c.templateId ?? "design-review", failedActions, unprocessed: u?.unprocessed ?? 0,
       id, title: c.title || "Design call", status: c.status || "unknown", participants: people,
       startedAt: c.startedAt ? new Date(c.startedAt).toISOString() : null,
       durationMs: Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null,
@@ -87,7 +110,7 @@ async function loadOverview() {
     d.collection("memories").aggregate([{ $match: tp }, { $group: { _id: "$status", n: { $sum: 1 } } }]).toArray(),
     d.collection("actions").aggregate([{ $match: tp }, { $group: { _id: "$status", n: { $sum: 1 } } }]).toArray(),
     d.collection("timings").find(tp, { projection: { stage: 1, ms: 1, at: 1 } }).sort({ _id: -1 }).limit(3000).toArray(),
-    d.collection("utterances").find(tp, { projection: { startedAt: 1, receivedAt: 1 } }).sort({ _id: -1 }).limit(5000).toArray(),
+    d.collection("utterances").find(tp, { projection: { startedAt: 1, receivedAt: 1, processedAt: 1 } }).sort({ _id: -1 }).limit(5000).toArray(),
     d.collection("says").countDocuments(tp),
     d.collection("audit_events").countDocuments(tp),
   ]);
@@ -102,10 +125,31 @@ async function loadOverview() {
   }
   const latency = timings.map((t) => ({ at: new Date(t.at).toISOString(), ms: t.ms as number, stage: t.stage as string })).filter((t) => t.stage === "total").reverse().slice(-80);
   const items = by(itemStatus);
+  // Reliability: what a buyer would ask. All from real rows; no targets are invented beyond the latency SLOs below.
+  const acted = Object.entries(by(actionStatus)); const actTotal = acted.reduce((a, [, n]) => a + n, 0);
+  const actOk = acted.filter(([k]) => k === "confirmed" || k === "sent").reduce((a, [, n]) => a + n, 0);
+  const lag = uttTimes.filter((u) => u.processedAt && u.receivedAt).map((u) => ms(u.processedAt) - ms(u.receivedAt));
+  const uttTotal = rows.reduce((a, r) => a + r.utterances, 0); const uttDone = uttTotal - rows.reduce((a, r) => a + r.unprocessed, 0);
+  const totalStage = stageStats(timings as any).find((s) => s.stage === "total");
+  const pct = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : null);
+  const reliability = {
+    failed: rows.filter((r) => r.state === "failed").length,
+    failedRate: pct(rows.filter((r) => r.state === "failed").length, rows.length),
+    botJoined: rows.filter((r) => r.voice).length, botJoinRate: pct(rows.filter((r) => r.voice).length, rows.length),
+    pipeline: pct(uttDone, uttTotal), within10s: pct(lag.filter((x) => x < 10_000).length, lag.length),
+    sends: pct(actOk, actTotal), sendsOk: actOk, sendsTotal: actTotal,
+    benchmarks: [
+      { name: "Utterance → answer p50", value: totalStage?.p50 ?? null, target: 2500 },
+      { name: "Utterance → answer p95", value: totalStage?.p95 ?? null, target: 6000 },
+      { name: "Memory search p50", value: stageStats(timings as any).find((s) => s.stage === "retrieve")?.p50 ?? null, target: 500 },
+      { name: "Reasoning p50", value: stageStats(timings as any).find((s) => s.stage === "analyze")?.p50 ?? null, target: 2500 },
+    ],
+  };
   return plain<any>({
+    reliability,
     sessions: rows,
     kpi: {
-      sessions: rows.length, live: rows.filter((r) => r.status === "live").length,
+      sessions: rows.length, live: rows.filter((r) => r.state === "live").length,
       utterances: rows.reduce((a, r) => a + r.utterances, 0),
       memories: Object.entries(by(memStatus)).filter(([k]) => k !== "forgotten").reduce((a, [, n]) => a + n, 0),
       locked: items.promoted ?? 0, says, audit,
