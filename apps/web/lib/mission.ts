@@ -38,7 +38,7 @@ async function loadMission(want?: string) {
   const [call, utt, timings, items, conflicts, audit, says, acts, runs] = await Promise.all([
     d.collection("calls").findOne({ _id: callId as any }),
     d.collection("utterances").find(q).sort({ _id: -1 }).limit(60).toArray(),
-    d.collection("timings").find({ ...q, stage: { $in: ["queue", "retrieve", "analyze"] } }).sort({ _id: -1 }).limit(90).toArray(),
+    d.collection("timings").find({ ...q, stage: { $in: ["queue", "retrieve", "analyze", "wake_to_chime", "fast_reply"] } }).sort({ _id: -1 }).limit(90).toArray(),
     d.collection("call_items").find(q).sort({ _id: -1 }).limit(40).toArray(),
     d.collection("conflicts").find(q).sort({ _id: -1 }).limit(20).toArray(),
     d.collection("audit_events").find(q).sort({ at: -1 }).limit(40).toArray(),
@@ -56,7 +56,14 @@ async function loadMission(want?: string) {
     const at = iso(t.at, t._id);
     if (t.stage === "queue") push({ id: `t${t._id}`, at, verb: "WAKE", node: "worker", edges: ["utt-worker"], coll: "utterances", rw: "read", text: "worker claimed the batch", ms: t.ms });
     if (t.stage === "retrieve") push({ id: `t${t._id}`, at, verb: "SEARCH", node: "mem", edges: ["worker-mem"], coll: "memories", rw: "read", text: "vector + text search over team memory", ms: t.ms });
+    // Floor signals (worker floor.ts / voice.ts): the chime the moment Gomon hears its name, and the fast answer lane.
+    if (t.stage === "wake_to_chime") push({ id: `t${t._id}`, at, verb: "WAKE", node: "worker", edges: ["utt-worker"], coll: "utterances", rw: "read", text: "heard its name, chime played in the meeting", ms: t.ms });
+    if (t.stage === "fast_reply") push({ id: `t${t._id}`, at, verb: "THINK", node: "worker", edges: ["worker-mem"], coll: "llm", rw: "read", text: "answered from memory on the fast lane", ms: t.ms });
     if (t.stage === "analyze") push({ id: `t${t._id}`, at, verb: "THINK", node: "worker", edges: [], coll: "llm", rw: "read", text: "reasoning model read the turn and memory", ms: t.ms });
+  }
+  for (const e of runs) {
+    if (e.kind === "barge_in") push({ id: `e${e._id}`, at: iso(e.at, e._id), verb: "SPEAK", node: "says", edges: ["says-call"], coll: "says", rw: "write", who: "Gomon", text: `stopped talking (${e.why === "stop_word" ? "someone said stop" : e.why === "wake_word" ? "new question" : "someone talked over it"})` });
+    if (e.kind === "alias_learned") push({ id: `e${e._id}`, at: iso(e.at, e._id), verb: "APPEND", node: "mem", edges: ["worker-mem"], coll: "members", rw: "write", text: `learned a name: "${cut(e.heard, 40)}" is ${e.person}` });
   }
   for (const i of items) push({ id: `i${i._id}`, at: iso(i.createdAt, i._id), verb: "APPEND", node: "items", edges: ["worker-items"], coll: "call_items", rw: "write", text: `${String(i.kind).replace(/_/g, " ")}: ${cut(i.text, 110)}` });
   for (const c of conflicts) push({ id: `c${c._id}`, at: iso(c.createdAt, c._id), verb: "FLAG", node: "worker", edges: ["worker-mem"], coll: "conflicts", rw: "write", text: `${c.memoryKey ? c.memoryKey + " · " : ""}${cut(c.note, 120)}` });
