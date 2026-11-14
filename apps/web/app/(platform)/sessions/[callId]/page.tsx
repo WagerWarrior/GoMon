@@ -1,0 +1,119 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import AutoRefresh from "@/components/platform/AutoRefresh";
+import Workspace from "@/components/Workspace";
+import { HBars } from "@/components/platform/Charts";
+import { activity, session } from "@/lib/platform";
+import { clock, dur, ms, when, initials } from "@/lib/format";
+export const dynamic = "force-dynamic";
+
+const TABS = [["transcript", "Transcript"], ["decisions", "Decisions"], ["said", "Gomon said"], ["runs", "Agent runs"], ["timings", "Timings"], ["history", "History"], ["live", "Live workspace"]] as const;
+
+export default async function SessionPage({ params, searchParams }: { params: Promise<{ callId: string }>; searchParams: Promise<{ tab?: string }> }) {
+  const { callId: raw } = await params; const callId = decodeURIComponent(raw);
+  const tab = (await searchParams).tab ?? "transcript";
+  const s = await session(callId);
+  if (!s.call) notFound();
+  const r = s.row; const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
+  const t0 = s.utterances[0]?.startedAt ?? s.call.startedAt;
+  const rel = (t: string) => (t && t0 ? `T+${dur(Math.max(0, +new Date(t) - +new Date(t0)))}` : "");
+  return (
+    <>
+      {tab !== "live" && <AutoRefresh ms={6000} />}
+      <header className="p-head">
+        <div>
+          <span className="eyebrow"><Link href="/sessions">Sessions</Link> / {callId}</span>
+          <h1>{s.call.title || "Design call"}</h1>
+          <div className="p-people">{(r?.participants ?? []).map((p: string) => <span key={p} className="p-person"><i>{initials(p)}</i>{p}</span>)}</div>
+        </div>
+        <div className="p-head-r"><span className={`pill ${s.call.status === "live" ? "good" : ""}`}>{s.call.status}</span><span className="muted small">{when(s.call.startedAt)}</span></div>
+      </header>
+      <section className="p-kpis p-kpis-5">
+        <div className="p-kpi"><span className="eyebrow">Length</span><b>{dur(r?.durationMs)}</b></div>
+        <div className="p-kpi"><span className="eyebrow">Heard</span><b>{s.utterances.length}</b></div>
+        <div className="p-kpi"><span className="eyebrow">Items</span><b>{s.items.length}</b></div>
+        <div className="p-kpi"><span className="eyebrow">Locked</span><b>{s.items.filter((i: any) => i.status === "promoted").length}</b></div>
+        <div className="p-kpi"><span className="eyebrow">Gomon said</span><b>{s.says.length}</b></div>
+      </section>
+      <nav className="p-tabs">{TABS.map(([k, l]) => <Link key={k} href={href(k)} aria-current={tab === k ? "page" : undefined}>{l}</Link>)}</nav>
+
+      {tab === "transcript" && (
+        <section className="p-card">
+          <ol className="p-transcript">
+            {s.utterances.map((u: any) => (
+              <li key={u._id} data-gomon={u.speaker?.displayName === "Gomon" ? "1" : undefined}>
+                <time>{rel(u.startedAt)}</time><b>{u.speaker?.displayName ?? "?"}</b><p>{u.text}</p>
+              </li>
+            ))}
+          </ol>
+          {!s.utterances.length && <div className="p-empty">Nothing heard yet.</div>}
+        </section>
+      )}
+
+      {tab === "decisions" && (
+        <section className="p-row p-row-2-1">
+          <div className="p-card">
+            <div className="p-card-h"><h2>Items from this session</h2></div>
+            <ul className="p-items">
+              {s.items.map((i: any) => (
+                <li key={i._id} data-status={i.status}>
+                  <span className="kind">{String(i.kind).replace(/_/g, " ")}</span>
+                  <p>{i.text}</p>
+                  <span className={`pill ${i.status === "promoted" ? "good" : i.status === "rejected" ? "bad" : i.status === "locking" ? "warn" : ""}`}>{i.status === "promoted" ? "locked" : i.status === "rejected" ? "vetoed" : i.status}</span>
+                </li>
+              ))}
+            </ul>
+            {!s.items.length && <div className="p-empty">No items extracted.</div>}
+          </div>
+          <div className="p-card">
+            <div className="p-card-h"><h2>Conflicts raised</h2></div>
+            <ul className="p-items">
+              {s.conflicts.map((c: any) => <li key={c._id}><span className="kind">{c.kind === "already_decided" ? "already decided" : "conflict"} {c.memoryKey ?? ""}</span><p>{c.note}</p></li>)}
+            </ul>
+            {!s.conflicts.length && <div className="p-empty">No conflicts.</div>}
+          </div>
+        </section>
+      )}
+
+      {tab === "said" && (
+        <section className="p-card">
+          <ol className="p-transcript">
+            {s.says.map((x: any) => <li key={x._id} data-gomon="1"><time>{rel(x.createdAt)}</time><b>{x.reason?.replace(/_/g, " ") ?? x.priority ?? "say"}</b><p>{x.text}</p><span className="pill">{x.status}</span></li>)}
+          </ol>
+          {!s.says.length && <div className="p-empty">Gomon has not spoken in this session.</div>}
+        </section>
+      )}
+
+      {tab === "runs" && (
+        <section className="p-card p-flush">
+          <table className="p-table">
+            <thead><tr><th>At</th><th>Trigger</th><th className="num">Batch</th><th className="num">Recalled</th><th>Memory</th></tr></thead>
+            <tbody>{s.runs.map((x: any) => <tr key={x._id}><td className="mono">{clock(x.at)}</td><td>{x.wake ? <span className="pill good">wake word</span> : "listening"}</td><td className="num">{x.batchSize ?? 1}</td><td className="num">{(x.retrievedMemoryIds ?? []).length}</td><td>{x.memoryEnabled === false ? "off" : "on"}</td></tr>)}</tbody>
+          </table>
+          {!s.runs.length && <div className="p-empty">No agent runs.</div>}
+        </section>
+      )}
+
+      {tab === "timings" && (
+        <section className="p-card">
+          <div className="p-card-h"><h2>Stage latency</h2><span className="muted small">p50, tick = p95</span></div>
+          <HBars rows={s.stages.map((x: any) => ({ label: x.stage.replace(/_/g, " "), v: x.p50 ?? 0, tick: x.p95, note: `${x.n} runs` }))} unit="ms" tickLabel="p95" />
+        </section>
+      )}
+
+      {tab === "history" && <History callId={callId} />}
+
+      {tab === "live" && <div className="p-live-ws"><Workspace callId={callId} /></div>}
+    </>
+  );
+}
+
+async function History({ callId }: { callId: string }) {
+  const rows = await activity(500, callId);
+  return (
+    <section className="p-card">
+      <ul className="p-feed">{rows.map((a, i) => <li key={i}><time>{clock(a.at)}</time><span className={`p-kind ${a.tone ?? ""}`}>{a.kind}</span><span className="p-feed-t"><b>{a.actor}</b> {a.text}</span></li>)}</ul>
+      {!rows.length && <div className="p-empty">No history.</div>}
+    </section>
+  );
+}
