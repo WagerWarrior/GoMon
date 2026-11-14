@@ -6,6 +6,7 @@
 import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import type { Cols } from "./db.ts";
 import { loadPeople, peopleIn } from "./people.ts";
+import { writeAdr } from "./knowledge.ts";
 import type { AuditEvent, CallItem, GithubOp, ItemKind, Memory } from "./shapes.ts";
 
 /** `voiceId` is the call's agent-template voice, stamped onto every `says` row written with this context. */
@@ -90,7 +91,11 @@ export async function promoteItem(ctx: Ctx, itemId: ObjectId, actor: string, via
     await audit(ctx, { callId: item.callId, type: "memory_locked", actor, reason: `locked via ${via}`, ref: { itemId, memoryId: insertedId, key: mem.key } }, session);
     promoted = { ...mem, _id: insertedId };
   }));
-  return promoted;
+  // The transaction callback assigns `promoted`; TS can't see that, so widen it back before reading.
+  const result = promoted as Memory | null;
+  // ADR artifact (embedded by Atlas) for every locked decision; outside the transaction so a slow write never blocks the lock.
+  if (result?._id) await writeAdr(ctx.c, { ...result, _id: result._id }).catch((e) => console.error("[adr]", e instanceof Error ? e.message : e));
+  return result;
 }
 
 /** A spoken "wait" during the veto window returns locking items to proposed. */

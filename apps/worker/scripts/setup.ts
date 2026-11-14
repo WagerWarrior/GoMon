@@ -7,6 +7,7 @@ import type { Db, Document } from "mongodb";
 import { config, INDEX } from "../src/config.ts";
 import { close, connect } from "../src/db.ts";
 import { ITEM_KINDS } from "../src/shapes.ts";
+import { KNOWLEDGE_INDEX } from "../src/knowledge.ts";
 
 /** An active decision locked on a call must carry its lock proof and sources (spec section 6). */
 const memoriesValidator: Document = {
@@ -199,4 +200,18 @@ await ensureSearchIndex(db, "memories", INDEX.text, "search", {
   },
 });
 await waitQueryable(db, "memories", [INDEX.vector, INDEX.text]);
+
+// Unstructured knowledge, embedded the same way (Atlas Automated Embedding, Voyage): past meeting transcripts, meeting
+// summaries and ADR artifacts. All pre-filtered by team (another team's meetings never come back).
+if (!(await db.listCollections({ name: "artifacts" }).toArray()).length) await db.createCollection("artifacts");
+await db.collection("artifacts").createIndex({ memoryId: 1 }, { unique: true });
+const auto = (path: string, filters: string[]) => ({
+  fields: [{ type: "autoEmbed", modality: "text", path, model: config.embedModel }, ...filters.map((p) => ({ type: "filter", path: p }))],
+});
+await ensureSearchIndex(db, "utterances", KNOWLEDGE_INDEX.utterances, "vectorSearch", auto("text", ["teamId", "projectId", "callId"]));
+await ensureSearchIndex(db, "calls", KNOWLEDGE_INDEX.calls, "vectorSearch", auto("summary", ["teamId", "projectId"]));
+await ensureSearchIndex(db, "artifacts", KNOWLEDGE_INDEX.artifacts, "vectorSearch", auto("text", ["teamId", "projectId", "kind"]));
+await waitQueryable(db, "utterances", [KNOWLEDGE_INDEX.utterances]);
+await waitQueryable(db, "calls", [KNOWLEDGE_INDEX.calls]);
+await waitQueryable(db, "artifacts", [KNOWLEDGE_INDEX.artifacts]);
 await close();

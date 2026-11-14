@@ -39,6 +39,8 @@ export interface Cols {
   chatMessages: Collection<Document>;
   users: Collection<Document>;
   userSessions: Collection<Document>;
+  /** Design artifacts (ADRs) written when decisions lock; `text` is embedded by Atlas (artifacts_auto, Voyage). */
+  artifacts: Collection<Document>;
 }
 
 export function cols(db: Db): Cols {
@@ -63,5 +65,6 @@ export function cols(db: Db): Cols {
     chatMessages: db.collection("chat_messages"),
     users: db.collection("users"),
     userSessions: db.collection("user_sessions"),
+    artifacts: db.collection("artifacts"),
   };
 }

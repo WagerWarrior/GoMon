@@ -9,6 +9,7 @@ import { config } from "./config.ts";
 import type { Ctx } from "./governance.ts";
 import { retrieve } from "./retrieve.ts";
 import { workspaceFor } from "./context.ts";
+import { searchKnowledge } from "./knowledge.ts";
 import { parseWake } from "./wake.ts";
 import { say } from "./agent.ts";
 import { templateFor } from "./templates.ts";
@@ -28,12 +29,14 @@ export function wantsFastReply(text: string): boolean {
 export async function fastReply(ctx: Ctx, u: { _id: ObjectId; callId: string; seq: number; text: string; speaker: { displayName: string } }): Promise<void> {
   const t0 = Date.now();
   const call = await ctx.c.calls.findOne({ _id: u.callId as never }, { projection: { summary: 1, templateId: 1, memoryEnabled: 1 } });
-  const [recent, said, memories, workspace, tpl] = await Promise.all([
+  const [recent, said, memories, workspace, tpl, knowledge] = await Promise.all([
     ctx.c.utterances.find({ callId: u.callId, seq: { $lt: u.seq } }).sort({ seq: -1 }).limit(8).toArray(),
     ctx.c.says.find({ callId: u.callId, reason: { $ne: "ack" } }).sort({ createdAt: -1 }).limit(4).toArray(),
     call?.memoryEnabled === false ? Promise.resolve([]) : retrieve(ctx.c, ctx, u.text),
     workspaceFor(ctx, u.callId),
     templateFor(ctx.c, ctx.teamId, call?.templateId),
+    // Past meeting transcripts, summaries and ADRs by meaning (Atlas Automated Embedding, Voyage).
+    call?.memoryEnabled === false ? Promise.resolve([]) : searchKnowledge(ctx.c, ctx, u.text, u.callId),
   ]);
   // Gomon's own lines go into the turn history, so earlier questions read as already answered.
   const turns = [
@@ -45,6 +48,7 @@ export async function fastReply(ctx: Ctx, u: { _id: ObjectId; callId: string; se
     typeof call?.summary === "string" && call.summary ? `CALL SO FAR: ${call.summary}` : "",
     "TEAM MEMORY:", ...(memories.length ? memories.map((m) => `- ${m.key ?? "-"} (${m.kind}): ${m.text}`) : ["(none matched)"]),
     "WORKSPACE:", ...workspace.sources.map((s) => `- ${s.id}: ${s.line}`),
+    "PAST MEETINGS AND ADRS (semantic search):", ...(knowledge.length ? knowledge.map((k) => `- ${k.line}`) : ["(none)"]),
     "RECENT TURNS (already answered):", ...turns.map((t) => t.line),
   ].filter(Boolean).join("\n");
   const res = await fetch("https://api.anthropic.com/v1/messages", {

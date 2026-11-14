@@ -13,10 +13,11 @@ import { close, cols, connect } from "../src/db.ts";
 import { DEFAULT_TEMPLATE_ID } from "../src/templates.ts";
 import { ttsMp3 } from "../src/voice.ts";
 
-const [meetingUrl, callIdArg, titleArg] = process.argv.slice(2);
+// projectId scopes what Gomon can read in this call (that project's memory + company context), e.g. enterprise-sso.
+const [meetingUrl, callIdArg, titleArg, projectArg] = process.argv.slice(2);
 const { RECALL_API_KEY, RECALL_REGION = "us-west-2", PUBLIC_BASE_URL = "", RECALL_WEBHOOK_TOKEN = "", RECALL_WEBHOOK_SECRET = "" } = process.env;
 if (!meetingUrl || !RECALL_API_KEY) {
-  console.error("usage: npm run join -- <meeting_url> [callId] [title]   (needs RECALL_API_KEY)");
+  console.error("usage: npm run join -- <meeting_url> [callId] [title] [projectId]   (needs RECALL_API_KEY)");
   process.exit(1);
 }
 const callId = callIdArg || `call-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}-${randomUUID().slice(0, 4)}`;
@@ -55,7 +56,7 @@ await cols(db).calls.updateOne(
   {
     $set: { botId: bot.id, meetingUrl, voiceOut: "recall" },
     $setOnInsert: {
-      teamId: config.teamId, projectId: config.projectId, title: titleArg || "Design call", status: "live", startedAt: new Date(),
+      teamId: config.teamId, projectId: projectArg || config.projectId, title: titleArg || "Design call", status: "live", startedAt: new Date(),
       memoryEnabled: true, templateId: DEFAULT_TEMPLATE_ID, utteranceSeq: 0, ...(owner ? { ownerUserId: String(owner._id) } : {}),
     },
   },

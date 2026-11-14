@@ -20,6 +20,7 @@ import { BUILTIN_TEMPLATES } from "../src/templates.ts";
 import { hashPassword } from "../src/auth.ts";
 import { COMPANY_PROJECT } from "../src/scope.ts";
 import { ITEM_KINDS, type ItemKind, type Memory } from "../src/shapes.ts";
+import { writeAdr } from "../src/knowledge.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const reset = process.argv.includes("--reset");
@@ -80,7 +81,7 @@ if (reset) {
   const results = await Promise.all([
     c.calls.deleteMany(scope), c.utterances.deleteMany(byCall), c.callItems.deleteMany(byCall), c.conflicts.deleteMany(byCall),
     c.says.deleteMany(byCall), c.agentEvents.deleteMany(byCall), c.timings.deleteMany(byCall), c.chatMessages.deleteMany(byCall),
-    c.auditEvents.deleteMany(scope), c.actions.deleteMany(scope), c.memories.deleteMany(scope),
+    c.auditEvents.deleteMany(scope), c.actions.deleteMany(scope), c.memories.deleteMany(scope), c.artifacts.deleteMany(scope),
     c.counters.deleteMany({ _id: { $regex: `^(${T}|${OTHER_TEAM})/` } }),
     // Policies used to be project-scoped; they now apply team-wide (no projectId).
     c.policies.deleteMany({ ...scope, projectId: { $exists: true } }),
@@ -230,6 +231,11 @@ const other = await parseDir("seed/other-team");
 const otherInserted = await seedMemories(OTHER_TEAM, OTHER_PROJECT, other);
 let locked = 0;
 for (const m of meetings) locked += await seedMeeting(m);
+// ADR artifact per locked decision (seeded past meetings and earlier calls); Atlas embeds each one (artifacts_auto, Voyage).
+let adrs = 0;
+for (const m of await c.memories.find({ teamId: T, status: "active", kind: "decision", origin: "call" }).toArray()) {
+  if (m._id) { await writeAdr(c, { ...m, _id: m._id }); adrs++; }
+}
 
 // Backfill: existing calls get participantUserIds from their participants' display names.
 for (const call of await c.calls.find({ teamId: T }, { projection: { participants: 1 } }).toArray()) {
@@ -246,6 +252,6 @@ for (const d of await c.memories.find({ teamId: T, key: { $regex: "^[A-Z]-\\d+$"
 for (const [p, n] of maxByPrefix) await c.counters.updateOne({ _id: `${T}/${p}` }, { $max: { n } }, { upsert: true });
 
 console.log(`memories: +${docInserted} of ${docCount} doc memories for ${T} (${docSets.map((s) => s.projectId).join(", ")}); +${otherInserted} of ${other.length} for ${OTHER_TEAM}`);
-console.log(`meetings: ${meetings.length} (+${locked} locked memories); counters: ${[...maxByPrefix].map(([p, n]) => `${p}-${n}`).join(" ")}`);
+console.log(`meetings: ${meetings.length} (+${locked} locked memories, ${adrs} ADR artifacts); counters: ${[...maxByPrefix].map(([p, n]) => `${p}-${n}`).join(" ")}`);
 console.log(`projects: ${projects.length}, members: ${members.length}, policies: ${policies.length}, agent templates: ${BUILTIN_TEMPLATES.length} (all synthetic: true)`);
 await close();
