@@ -14,7 +14,7 @@ export default async function Activity({ searchParams }: { searchParams: Promise
     <>
       <AutoRefresh />
       <header className="p-head">
-        <div><span className="eyebrow">audit_events · says · actions · agent_events · conflicts</span><h1>Activity</h1></div>
+        <div><h1>Activity</h1></div>
         <div className="pills">{FILTERS.map(([k, l]) => <Link key={k} href={`/activity?f=${encodeURIComponent(k)}`} className="chip" aria-pressed={f === k}>{l}</Link>)}</div>
       </header>
       <section className="p-card p-flush">

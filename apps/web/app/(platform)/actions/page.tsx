@@ -11,7 +11,7 @@ export default async function Actions() {
   return (
     <>
       <AutoRefresh />
-      <header className="p-head"><div><span className="eyebrow">Outbox · policy checked · idempotent</span><h1>Actions</h1></div></header>
+      <header className="p-head"><div><h1>Actions</h1><span className="eyebrow">Outbox, policy checked</span></div></header>
       <section className="p-card p-flush">
         <table className="p-table">
           <thead><tr><th>Action</th><th>What</th><th>Asked by</th><th>Policy</th><th className="num">Tries</th><th>Status</th><th>Result</th><th>Created</th></tr></thead>

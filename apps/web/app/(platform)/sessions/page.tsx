@@ -4,14 +4,16 @@ import { sessions } from "@/lib/platform";
 import { dur, when, initials } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
-export default async function Sessions() {
-  const rows = await sessions();
+export default async function Sessions({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
+  const q = ((await searchParams).q ?? "").trim().toLowerCase();
+  const all = await sessions();
+  const rows = q ? all.filter((r) => [r.title, r.id, ...r.participants].join(" ").toLowerCase().includes(q)) : all;
   const total = rows.reduce((a, r) => a + (r.durationMs ?? 0), 0);
   return (
     <>
       <AutoRefresh />
       <header className="p-head">
-        <div><span className="eyebrow">{rows.length} sessions · {dur(total)} recorded</span><h1>Sessions</h1></div>
+        <div><h1>Sessions</h1><span className="eyebrow">{q ? `${rows.length} of ${all.length} match “${q}”` : `${rows.length} sessions · ${dur(total)} recorded`}</span></div>
       </header>
       <section className="p-card p-flush">
         <table className="p-table">

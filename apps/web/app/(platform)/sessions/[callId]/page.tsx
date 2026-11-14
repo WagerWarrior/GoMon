@@ -4,6 +4,8 @@ import AutoRefresh from "@/components/platform/AutoRefresh";
 import Workspace from "@/components/Workspace";
 import { HBars } from "@/components/platform/Charts";
 import { activity, session } from "@/lib/platform";
+import { templates } from "@/lib/templates";
+import { TemplatePicker } from "@/components/platform/Templates";
 import { clock, dur, ms, when, initials } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
@@ -12,7 +14,7 @@ const TABS = [["workspace", "Workspace"], ["transcript", "Transcript"], ["decisi
 export default async function SessionPage({ params, searchParams }: { params: Promise<{ callId: string }>; searchParams: Promise<{ tab?: string }> }) {
   const { callId: raw } = await params; const callId = decodeURIComponent(raw);
   const tab = (await searchParams).tab ?? "workspace";
-  const s = await session(callId);
+  const [s, tpl] = await Promise.all([session(callId), templates()]);
   if (!s.call) notFound();
   const r = s.row; const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
   const t0 = s.utterances[0]?.startedAt ?? s.call.startedAt;
@@ -26,7 +28,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
           <h1>{s.call.title || "Design call"}</h1>
           <div className="p-people">{(r?.participants ?? []).map((p: string) => <span key={p} className="p-person"><i>{initials(p)}</i>{p}</span>)}</div>
         </div>
-        <div className="p-head-r"><span className={`pill ${s.call.status === "live" ? "good" : ""}`}>{s.call.status}</span><span className="muted small">{when(s.call.startedAt)}</span></div>
+        <div className="p-head-r"><TemplatePicker callId={callId} current={s.call.templateId ?? "design-review"} options={tpl.rows.map((t: any) => ({ id: t._id, name: t.name }))} /><span className={`pill ${s.call.status === "live" ? "good" : ""}`}>{s.call.status}</span><span className="muted small">{when(s.call.startedAt)}</span></div>
       </header>
       <section className="p-kpis p-kpis-5">
         <div className="p-kpi"><span className="eyebrow">Length</span><b>{dur(r?.durationMs)}</b></div>

@@ -84,7 +84,7 @@ export default function MissionControl({ initial }: { initial: Data }) {
     <div className="mc">
       <header className="p-head">
         <div>
-          <span className="eyebrow">Mission control · voice, text, Atlas and connectors in one loop</span>
+          <span className="eyebrow">Mission control</span>
           <h1>{ctx?.title ?? "No session"}</h1>
           <div className="mc-calls">
             {data.calls.map((c) => <button key={c._id} className="chip" aria-pressed={c._id === data.callId} onClick={() => setCallId(c._id)}>{c._id}</button>)}

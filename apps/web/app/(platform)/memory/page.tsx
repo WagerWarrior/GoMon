@@ -12,7 +12,7 @@ export default async function Memory({ searchParams }: { searchParams: Promise<{
     <>
       <AutoRefresh ms={8000} />
       <header className="p-head">
-        <div><span className="eyebrow">Governed team memory · Atlas memories</span><h1>Memory</h1></div>
+        <div><h1>Memory</h1></div>
         <div className="pills">{[["active", n("active")], ["superseded", n("superseded")], ["forgotten", n("forgotten")], ["all", all.length]].map(([k, c]) => <Link key={k} href={`/memory?status=${k}`} className="chip" aria-pressed={status === k}>{k} {c}</Link>)}</div>
       </header>
       <section className="p-card p-flush">
