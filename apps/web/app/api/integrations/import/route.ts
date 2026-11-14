@@ -9,8 +9,11 @@ export const dynamic = "force-dynamic";
  * The response names the keys that were set, never their values. Other services (worker, bot page) pick them up on restart.
  */
 export async function POST(req: Request) {
-  const host = (req.headers.get("host") ?? "").split(":")[0];
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) || req.headers.get("x-forwarded-for")) return Response.json({ error: "Import only works on this computer (localhost)." }, { status: 403 });
+  // Next fills x-forwarded-for with the real client address; every hop must be this machine.
+  const host = (req.headers.get("host") ?? "").replace(/:\d+$/, "");
+  const loop = (a: string) => ["127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"].includes(a.trim());
+  const hops = (req.headers.get("x-forwarded-for") ?? "").split(",").filter((x) => x.trim());
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) || !hops.every(loop)) return Response.json({ error: "Import only works on this computer (localhost)." }, { status: 403 });
   const { text } = (await req.json().catch(() => ({}))) as { text?: string };
   const pasted = parseEnv(text ?? "");
   const known = new Set(setup().flatMap((s) => s.keys.map((k) => k.k)));
