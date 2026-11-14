@@ -1,53 +1,47 @@
 # MAX_NOTES: Max's lane, for teammates and their agents
 
 Owner: Max. Written for Rob's and Tamir's agents to read and reconcile against.
-Updated: 2026-11-14. Detail and evidence: `docs/max-workspace-status.md`. The spec (`spec.md`) wins on conflict.
+Updated: 2026-11-14 (after Rob's worker landed). The spec (`spec.md`) wins on conflict.
 
-## What exists on main (Max)
-| Path | What | Status |
+## One system now
+Everything runs on the shared Atlas cluster, database **`gomon`** (Rob's setup + seed). `gomon_max` was Max's
+scratch database and is no longer used.
+
+| Piece | Owner | Reads / writes in `gomon` |
 |---|---|---|
-| `apps/web` | Next.js workspace: live panels from change streams (SSE), lock / reject / correct / forget, actions & audit, Mermaid diagram, Ask Gomon (memory on vs off) | Works on real Atlas |
-| `apps/connectors` | Outbox worker: `actions` -> GitHub issues / Slack thread, policy check first, idempotent, read-back to `confirmed` | Works on real GitHub + Slack |
-| `docs/max-workspace-status.md` | Run commands, verified evidence, open items | Current |
+| `apps/bot-page` | Tamir | Recall transcript webhook -> `utterances`; speaks `says` |
+| `apps/worker` | Rob | `utterances` -> `call_items`, `conflicts`, `says`, `memories` (consensus lock, correct, forget), `actions` |
+| `apps/web` | Max | Live workspace on change streams; human lock / reject / correct / forget; Ask Gomon; enqueues `actions` |
+| `apps/connectors` | Max | `actions` -> GitHub issues / Slack thread, policy check first, read-back to `confirmed` |
 
-Tests: `apps/web` 15, `apps/connectors` 12 (`npm test` in each; needs a local replica set or `MONGODB_URI`).
+Verified end to end on `gomon`: an action queued by Rob's voice agent was sent by the connector worker
+(GitHub issue #6, policy `role engineer may create_issue`, status `confirmed`).
 
-## Data contract the workspace assumes (Rob: please confirm or tell us the diff)
-All reads filter `teamId` + `projectId`. Shapes are in `apps/web/lib/types.ts` and `apps/web/README.md`.
-- `calls` `{ _id: callId, teamId, projectId, title, status, participants[], slackThreadTs? }`
-- `utterances` `{ callId, seq, speaker, text, at }`
-- `call_items` `{ callId, kind, text, status: proposed|locking|promoted|rejected, expiresAt (TTL), memoryId? }`
-- `memories` `{ teamId, projectId, key?, kind, text, version, status: active|superseded|forgotten, origin: call|doc, sourceRefs[], supersedes?, lock?, embedding? }`
-- `conflicts`, `timings`, `members { teamId, displayName, role }`, `policies { teamId, projectId, action, allowedRoles[] }`
-- `actions` `{ type: create_issue|post_slack, status: queued|sending|sent|confirmed|failed|denied, idempotencyKey (unique), callId, payload, requestedBy, policyCheck, externalId? }`
-- `audit_events` `{ teamId, projectId, callId?, at, type, actor, reason, ref }`
+## Schema: web now matches apps/worker
+- Lock assigns the next key from `counters` (`team/project/D` …), same scheme as `nextKey` in the worker.
+- `sourceRefs: [{ type: "call", callId, itemId: ObjectId, utteranceIds: ObjectId[] }]`, `lock.via: "human"`,
+  `updatedAt` on every write (the worker's fresh-memory guard reads it), audit type `memory_locked`.
+- Corrections check the `correct_memory` policy; forget checks `forget_memory`.
+- `actions.idempotencyKey = type:callId:memoryId:vN` and the same payload text as `enqueueForCall`, so voice
+  "create the tickets" and a UI click file each decision version once.
 
-Writers: anyone may write `utterances`, `call_items`, `conflicts`, `timings`. Only `lib/governance.ts` (or Rob's
-equivalent) should flip memory status, and only the connector worker sends externally.
+## Retrieval: one implementation
+`apps/web/lib/retrieval.ts` is a port of `apps/worker/src/retrieve.ts`: `$rankFusion` of `$vectorSearch` on
+`memories_auto` (Atlas Automated Embedding) and `$search` on `memories_text`, team/project/active pre-filter, plus
+exact keys and the fresh guard. Web no longer stores client-side vectors; the `memories_vector` index is gone.
+If Rob changes ranking, mirror it there (or we extract a shared package after the demo).
 
-## Retrieval (overlaps Rob's lane; tell us if you want it replaced)
-- Vector index `memories_vector` on `memories.embedding`: 1024 dims, cosine, filters `status`, `teamId`, `projectId`.
-- Embeddings: Voyage `voyage-4`, `input_type` document/query. `npm run embed` in `apps/web` creates the index and backfills.
-- A correction drops the old vector (`correctMemory`), so the new text is re-embedded before it is searchable.
-- `/api/ask` is vector-only. Rob's hybrid retrieval (vector + text) should replace `retrieve()` in `apps/web/lib/retrieval.ts`
-  with the same signature: `(db, {teamId, projectId}, question, k) -> [{_id, key, kind, text, version, score}]`.
+## Ask Gomon (memory on vs off), live on `gomon`
+Proposal "flat 100 req/s, no bursts, including Acme":
+- Memory on (Haiku, ~2 s): "This conflicts with D-12 … and with R-12 …", cites D-12, R-12, R-14, R-15 (via text + vector).
+- Memory off: generic advice, no team decisions cited.
+LLM: `LLM_PROVIDER=anthropic`, `LLM_API_KEY` in `.env.example`, default model `claude-haiku-5-5` (`LLM_MODEL` overrides).
 
-## Questions for Rob
-1. **Databases.** We hear you are splitting a per-chat sample database from the main "brain". The workspace takes
-   `MONGODB_DB` and scopes by team/project. Which database does a call's workspace read, and which writes are
-   promoted into the brain? If promotion crosses databases it cannot share one transaction with its audit event.
-   Max is on `gomon_max` on the shared cluster today; `gomon` is untouched.
-2. **Memory keys.** Locked call decisions have no `key` (seeded doc memories have D-07, R-12...). Should lock assign
-   the next `D-NN`? Ask Gomon and Slack cite keys when present.
-3. **Agent loop -> actions.** Voice commands should write `actions` with `idempotencyKey = type:callId:memoryId:vN`
-   so a voice "create the tickets" and a UI click do not double-send.
-4. **Validators.** Connector tests already run under the spec's `actions` validator (sent requires
-   `policyCheck.allowed` and `requestedBy`). Send yours and we will run the suites against it.
-
-## LLM
-- No LLM key yet. LangSmith key is valid (free tier) but has no model access (`llm_gateway_enabled: false`).
-- `apps/web/lib/answer.ts` is ready: set `LLM_PROVIDER=anthropic`, `LLM_API_KEY`, optional `LLM_MODEL`
-  (default `claude-sonnet-5-5`). Without a key, or on any LLM error, it falls back to quoting the top memory.
+## Still open
+1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,
+   tell us which database the workspace reads and how promotion crosses (it cannot share one transaction).
+2. Atlas Admin API keys return 401 (the connection string works).
+3. LangSmith key works for tracing only; the org has no model gateway.
 
 ## Ownership (do not edit without asking)
 Max: `apps/web/**`, `apps/connectors/**`, `docs/max-workspace-status.md`, `MAX_NOTES.md`.
