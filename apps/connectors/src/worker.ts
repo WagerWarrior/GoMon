@@ -1,6 +1,7 @@
 import type { Db } from "mongodb";
 import { dueActionIds, processAction } from "./outbox";
 import { ensureWorkflowIndexes, sweepWorkflows } from "./workflows";
+import { sweepRecaps } from "./recap";
 import type { Env } from "./types";
 
 /**
@@ -13,7 +14,7 @@ export function runConnectors(d: Db, env: Env, opts: { sweepMs?: number; log?: (
   async function sweep() {
     if (busy) { again = true; return; }
     busy = true;
-    try { do { again = false; const wf = await sweepWorkflows(d); if (wf) log(`workflows fired: ${wf}`); for (const id of await dueActionIds(d)) { const o = await processAction(d, id, env); if (o !== "skipped") log(`${id} -> ${o}`); } } while (again && !stopped); }
+    try { do { again = false; const wf = await sweepWorkflows(d); if (wf) log(`workflows fired: ${wf}`); const rc = await sweepRecaps(d); if (rc) log(`recaps: ${rc}`); for (const id of await dueActionIds(d)) { const o = await processAction(d, id, env); if (o !== "skipped") log(`${id} -> ${o}`); } } while (again && !stopped); }
     catch (e: any) { log(`sweep error: ${e?.message ?? e}`); } finally { busy = false; }
   }
   void sweep();
