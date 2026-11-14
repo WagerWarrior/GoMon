@@ -58,6 +58,24 @@ Endpoints (Max: for the templates page and the per-call dropdown):
 Verified live: silent-scribe recorded D-12/R-12 conflicts without speaking and answered when addressed; design-review spoke one;
 engineer create denied and audited; lead create succeeded; a template `voiceId` reaches `says`.
 
+## Users and per-user calls (`users`, `user_sessions`)
+- `users { _id, email, name, teamId, role, displayNames[], displayNamesLower[], passwordHash: "scrypt$…" }` (validator; unique email).
+  Seeded (synthetic, password `gomon-demo` or `DEMO_PASSWORD`): `rob@gomon.dev` (lead), `max@gomon.dev`, `tamir@gomon.dev`.
+- `user_sessions { _id: sha256(token), userId, expiresAt }` with a TTL index; the raw token is never stored.
+- Calls get `ownerUserId` (creator) and `participantUserIds` (filled when a speaker's Meet display name matches `displayNames`).
+  Visibility rule (use the same in the workspace): `{ teamId, $or: [{ ownerUserId: me }, { participantUserIds: me }] }`.
+- `POST /api/auth/login {email,password}` → `{ token, user }`; `POST /api/auth/logout`; `GET /api/me`; `GET /api/me/calls`.
+  Send the user token as `x-session-token` (the service `WORKER_TOKEN` bearer still applies). `POST /api/calls` sets the owner.
+
+## Live state, links, grounding
+- `calls.agentState { state: listening|thinking|searching|answering, detail, at }`, also streamed as `event: state` on
+  `/api/says/stream` (bot tile: show it, don't speak it).
+- "Hey Gomon, drop the GitHub link for D-15" → `share_link`: decision → its GitHub issue/Slack post from `actions.externalUrl`,
+  "repo" → repo URL, else GitHub search (`GITHUB_TOKEN`), else latest link from the call. Posted to the meeting chat through
+  Recall `send_chat_message` (bot id parsed from the Recall `sourceKey`), and always stored in `chat_messages`.
+- Spoken replies must cite an active memory key or be "Nothing in team memory on that yet."; anything else is replaced and logged
+  as `agent_events.kind = ungrounded_reply_dropped`. Spoken lines use a conversational style; "On it." on every wake word.
+
 ## Answers to MAX_NOTES questions
 1. **One database: `gomon`.** Call scratch (`call_items`, TTL) and canonical memory (`memories`) live in the same database, so
    promotion, its audit row, and outbox entries share one transaction. Please point the workspace and connectors at

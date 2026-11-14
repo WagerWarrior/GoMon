@@ -17,6 +17,7 @@ import { checkPolicy, type Ctx } from "./governance.ts";
 import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
 import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
 import { parseWake } from "./wake.ts";
+import { login, logout, userFromToken, userIdForDisplayName, visibleCallsFilter } from "./auth.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -122,13 +123,22 @@ function send(res: ServerResponse, status: number, data: unknown): void {
 }
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
-async function ensureCall(callId: string, title?: string, speaker?: string, meetingUrl?: string, templateId?: string): Promise<number> {
+async function ensureCall(callId: string, opts: { title?: string; speaker?: string; meetingUrl?: string; templateId?: string; botId?: string; ownerUserId?: string } = {}): Promise<number> {
+  const { title, speaker, meetingUrl, templateId, botId, ownerUserId } = opts;
+  const speakerUserId = speaker ? await userIdForDisplayName(c, config.teamId, speaker) : null;
+  const addToSet: Record<string, string> = {};
+  if (speaker) addToSet.participants = speaker;
+  if (speakerUserId) addToSet.participantUserIds = speakerUserId;
   const call = await c.calls.findOneAndUpdate(
     { _id: callId as never },
     {
       $inc: { utteranceSeq: speaker ? 1 : 0 },
-      $setOnInsert: { teamId: config.teamId, projectId: config.projectId, title: title ?? "Design call", status: "live", startedAt: new Date(), memoryEnabled: true, templateId: templateId ?? DEFAULT_TEMPLATE_ID, ...(meetingUrl ? { meetingUrl } : {}) },
-      ...(speaker ? { $addToSet: { participants: speaker } } : {}),
+      $setOnInsert: {
+        teamId: config.teamId, projectId: config.projectId, title: title ?? "Design call", status: "live", startedAt: new Date(), memoryEnabled: true,
+        templateId: templateId ?? DEFAULT_TEMPLATE_ID, ...(meetingUrl ? { meetingUrl } : {}), ...(ownerUserId ? { ownerUserId } : {}),
+      },
+      ...(botId ? { $set: { botId } } : {}),
+      ...(Object.keys(addToSet).length ? { $addToSet: addToSet } : {}),
     },
     { upsert: true, returnDocument: "after" },
   );
@@ -140,9 +150,12 @@ async function postUtterance(b: Record<string, unknown>) {
   const speakerName = str((b.speaker as Record<string, unknown> | undefined)?.displayName) ?? str(b.speaker);
   if (!callId || !text || !speakerName) return { status: 400, data: { error: "callId, text and speaker.displayName are required" } };
   const source = (["recall", "scribe", "typed"] as const).find((s) => s === b.source) ?? "typed";
-  const seq = await ensureCall(callId, undefined, speakerName);
+  const sourceKey = str(b.sourceKey) ?? randomUUID();
+  // Recall sourceKeys are recall:<botId>:<participantId>:<start>; the bot id lets Gomon post to the meeting chat.
+  const botId = /^recall:([^:]+):/.exec(sourceKey)?.[1];
+  const seq = await ensureCall(callId, { speaker: speakerName, botId });
   const doc: Utterance = {
-    callId, teamId: config.teamId, projectId: config.projectId, seq, sourceKey: str(b.sourceKey) ?? randomUUID(),
+    callId, teamId: config.teamId, projectId: config.projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
     ...(str(b.startedAt) ? { startedAt: new Date(String(b.startedAt)) } : {}), ...(str(b.endedAt) ? { endedAt: new Date(String(b.endedAt)) } : {}),
   };
@@ -161,8 +174,13 @@ function streamSays(req: IncomingMessage, res: ServerResponse, callId: string): 
   void c.says.find({ callId, status: "queued" }).sort({ createdAt: 1 }).forEach((s) => { emit(s); });
   const cs = c.says.watch([{ $match: { operationType: "insert", "fullDocument.callId": callId } }]);
   cs.on("change", (ev) => { if (ev.operationType === "insert") emit(ev.fullDocument); });
+  // Agent state (listening | thinking | searching | answering) for the bot tile: `event: state`.
+  const st = c.calls.watch([{ $match: { operationType: "update", "documentKey._id": callId, "updateDescription.updatedFields.agentState": { $exists: true } } }]);
+  st.on("change", (ev) => {
+    if (ev.operationType === "update") res.write(`event: state\ndata: ${JSON.stringify(ev.updateDescription?.updatedFields?.agentState ?? {})}\n\n`);
+  });
   const ka = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
-  req.on("close", () => { clearInterval(ka); void cs.close(); });
+  req.on("close", () => { clearInterval(ka); void cs.close(); void st.close(); });
 }
 
 async function audit(type: string, actor: string, reason: string, ref: Record<string, unknown>, callId?: string): Promise<void> {
@@ -205,7 +223,7 @@ async function saveTemplate(b: Record<string, unknown>, id?: string): Promise<{ 
 
 const server = createServer(async (req, res) => {
   res.setHeader("access-control-allow-origin", "*");
-  res.setHeader("access-control-allow-headers", "content-type, authorization");
+  res.setHeader("access-control-allow-headers", "content-type, authorization, x-session-token");
   res.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, OPTIONS");
   if (req.method === "OPTIONS") return void res.writeHead(204).end();
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -219,13 +237,34 @@ const server = createServer(async (req, res) => {
       const r = await postUtterance(await body(req));
       return send(res, r.status, r.data);
     }
+    // ---------- users (Atlas): login, me, my calls ----------
+    const sessionToken = req.headers["x-session-token"];
+    const me = await userFromToken(c, typeof sessionToken === "string" ? sessionToken : undefined);
+    if (req.method === "POST" && url.pathname === "/api/auth/login") {
+      const b = await body(req);
+      const r = str(b.email) && str(b.password) ? await login(c, String(b.email), String(b.password)) : null;
+      if (!r) return send(res, 401, { error: "invalid email or password" });
+      await audit("user_login", r.user.name, "login", { userId: r.user._id });
+      return send(res, 200, r);
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+      if (typeof sessionToken === "string") await logout(c, sessionToken);
+      return send(res, 200, { ok: true });
+    }
+    if (req.method === "GET" && url.pathname === "/api/me") return me ? send(res, 200, me) : send(res, 401, { error: "not signed in" });
+    if (req.method === "GET" && url.pathname === "/api/me/calls") {
+      if (!me) return send(res, 401, { error: "not signed in" });
+      const calls = await c.calls.find(visibleCallsFilter(me), { projection: { title: 1, status: 1, startedAt: 1, participants: 1, ownerUserId: 1, templateId: 1, agentState: 1 } })
+        .sort({ startedAt: -1 }).limit(100).toArray();
+      return send(res, 200, calls);
+    }
     if (req.method === "POST" && url.pathname === "/api/calls") {
       const b = await body(req);
       const templateId = str(b.templateId);
       if (templateId && !(await c.agentTemplates.findOne({ _id: templateId, teamId: config.teamId }))) return send(res, 400, { error: `unknown template ${templateId}` });
       const callId = str(b.callId) ?? `call-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}-${randomUUID().slice(0, 4)}`;
-      await ensureCall(callId, str(b.title), undefined, str(b.meetingUrl), templateId);
-      return send(res, 201, { callId, templateId: templateId ?? DEFAULT_TEMPLATE_ID });
+      await ensureCall(callId, { title: str(b.title), meetingUrl: str(b.meetingUrl), templateId, ownerUserId: me?._id });
+      return send(res, 201, { callId, templateId: templateId ?? DEFAULT_TEMPLATE_ID, ownerUserId: me?._id ?? null });
     }
     const callMatch = /^\/api\/calls\/([^/]+)$/.exec(url.pathname);
     if (req.method === "PATCH" && callMatch) {

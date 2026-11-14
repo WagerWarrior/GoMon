@@ -121,13 +121,31 @@ await ensureCollection(db, "agent_templates", {
     },
   },
 });
+await ensureCollection(db, "users", {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["email", "name", "teamId", "role", "passwordHash", "displayNamesLower"],
+    properties: {
+      email: { bsonType: "string", pattern: "^[^@\\s]+@[^@\\s]+$" },
+      role: { enum: ["lead", "engineer", "guest"] },
+      passwordHash: { bsonType: "string", pattern: "^scrypt\\$" },
+      displayNamesLower: { bsonType: "array" },
+    },
+  },
+});
 for (const n of ["teams", "projects", "members", "policies", "calls", "utterances", "conflicts", "audit_events",
-  "agent_events", "timings", "says", "counters", "stream_offsets"]) await ensureCollection(db, n);
+  "agent_events", "timings", "says", "counters", "stream_offsets", "user_sessions", "chat_messages"]) await ensureCollection(db, n);
 
 const ix = (coll: string, spec: Document, opts: Document = {}) => db.collection(coll).createIndex(spec, opts);
 await Promise.all([
   ix("members", { teamId: 1, displayName: 1 }, { unique: true }),
   ix("agent_templates", { teamId: 1, name: 1 }, { unique: true }),
+  ix("users", { email: 1 }, { unique: true }),
+  ix("users", { teamId: 1, displayNamesLower: 1 }),
+  ix("user_sessions", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+  ix("calls", { teamId: 1, ownerUserId: 1, startedAt: -1 }),
+  ix("calls", { teamId: 1, participantUserIds: 1, startedAt: -1 }),
+  ix("chat_messages", { callId: 1, at: -1 }),
   ix("policies", { teamId: 1, projectId: 1, action: 1 }),
   ix("utterances", { callId: 1, sourceKey: 1 }, { unique: true }),
   ix("utterances", { callId: 1, seq: 1 }),

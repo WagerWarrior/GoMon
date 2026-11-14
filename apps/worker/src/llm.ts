@@ -6,7 +6,7 @@ export type TurnLine = { id: string; speaker: string; text: string };
 export type OpenItem = { id: string; kind: ItemKind; text: string; status: string };
 export type MemoryLine = { id: string; key?: string; kind: string; text: string };
 
-export type CommandType = "none" | "lock_item" | "create_tickets" | "post_slack" | "correct_memory" | "forget_memory";
+export type CommandType = "none" | "lock_item" | "create_tickets" | "post_slack" | "correct_memory" | "forget_memory" | "share_link";
 
 /** One structured result per committed utterance: everything the loop needs, in a single fast model call. */
 export type Analysis = {
@@ -16,7 +16,7 @@ export type Analysis = {
   conflicts: { itemRef: string; memoryId: string; severity: "high" | "medium" | "low"; kind: "conflict" | "already_decided"; note: string }[];
   agreement: { itemRefs: string[]; agreedBy: string[] };
   objection: boolean;
-  command: { type: CommandType; memoryId: string; itemRef: string; newText: string };
+  command: { type: CommandType; memoryId: string; itemRef: string; newText: string; query: string };
   suggestion: string;
 };
 
@@ -42,8 +42,8 @@ const SCHEMA = {
     agreement: { type: "object", additionalProperties: false, required: ["itemRefs", "agreedBy"], properties: { itemRefs: { type: "array", items: str }, agreedBy: { type: "array", items: str } } },
     objection: { type: "boolean" },
     command: {
-      type: "object", additionalProperties: false, required: ["type", "memoryId", "itemRef", "newText"],
-      properties: { type: { type: "string", enum: ["none", "lock_item", "create_tickets", "post_slack", "correct_memory", "forget_memory"] }, memoryId: str, itemRef: str, newText: str },
+      type: "object", additionalProperties: false, required: ["type", "memoryId", "itemRef", "newText", "query"],
+      properties: { type: { type: "string", enum: ["none", "lock_item", "create_tickets", "post_slack", "correct_memory", "forget_memory", "share_link"] }, memoryId: str, itemRef: str, newText: str, query: str },
     },
     suggestion: str,
   },
@@ -56,17 +56,22 @@ Capture only these item kinds: ${kinds.join(", ")}.
 Transcripts come from live speech-to-text: often lowercase, unpunctuated, and split mid-thought across utterances. Read them together.
 Return JSON only, matching the schema. Be conservative and BRIEF (latency matters): an empty result is correct for small talk and filler.
 
+How you sound: like a sharp teammate on the call, not a system. Contractions, plain words, one idea per sentence. Lead with the
+point ("Heads up, that clashes with R-12..."), never with a label ("Conflict:", "Per D-12:"). Don't repeat what was just said.
+Say keys naturally once ("R-12 says Acme needs bursts up to 3,000 a second"). Numbers the way people say them.
+
 Rules:
 - addressed: true if a new utterance speaks to you by name. Speech-to-text never spells your name right ("goman", "gourmand", "so man",
   "go on", "no man"); WAKE lines list utterances a sound-alike matcher already flagged as addressed to you.
-- reply: if addressed, a short spoken answer (max 35 words, no markdown, no lists). Ground it ONLY in the provided memories and
-  call items and cite memory keys like "R-12" when you use them. If the memories do not contain the answer, say so. Empty if not addressed.
+- reply: if addressed, a short spoken answer (max 30 words, no markdown, no lists). Every claim must come from the provided memories
+  or call items, and you name at least one memory key you relied on. If they don't contain the answer, reply exactly
+  "Nothing in team memory on that yet. Want me to log it as an open question?" Never answer from general knowledge. Empty if not addressed.
 - newItems: high-level design content stated in the NEW utterances (decision proposals, requirements, constraints, risks, open questions,
   action items with owner, assumptions, interfaces, alternatives). Max 3 items, each max 25 words, self-contained. A single proposal
   with several parts is ONE decision item that summarizes all parts. Do not repeat an existing open item. Never low-level detail.
-- conflicts: for each new item ("new:<index>") or open item (its id) that contradicts a memory, give memoryId and a note (max 25
-  words, spoken aloud) naming the memory key and the specific clash. kind "already_decided" when the team re-debates something a
-  memory already settles. severity "high" only for direct contradictions of a decision or customer requirement.
+- conflicts: for each new item ("new:<index>") or open item (its id) that contradicts a memory, give memoryId and a note (max 22
+  words, spoken aloud in the voice above) naming the memory key and the specific clash. kind "already_decided" when the team re-debates
+  something a memory already settles. severity "high" only for direct contradictions of a decision or customer requirement.
 - agreement: when a new utterance clearly expresses team agreement with proposed item(s) ("agreed", "let's do that", "sounds good,
   ship it", "yes let's go with that"), itemRefs = those items ("new:<index>" or ids; usually the latest proposal) and agreedBy =
   speakers who agreed (not the proposer alone). A bare "yeah", "mm", "right" or "okay" that the SAME speaker continues past is
@@ -74,7 +79,9 @@ Rules:
 - objection: true if the speaker pushes back on something being locked ("wait", "no", "hold on", "not yet").
 - command: only when the speaker explicitly asks you: "lock it in" -> lock_item (itemRef); "create the tickets" -> create_tickets;
   "post it to Slack" -> post_slack; "correct that, X is Y" -> correct_memory (memoryId of the memory being corrected, newText = the
-  full corrected memory text); "forget that" -> forget_memory (memoryId). Otherwise type "none" with empty fields.
+  full corrected memory text); "forget that" -> forget_memory (memoryId); "send/drop/share the link to X", "where's the GitHub issue
+  for X", "open the repo" -> share_link (memoryId if X is a memory, query = what they want a link to). Otherwise type "none" with
+  empty fields. Unused fields are "".
 - suggestion: only a strong, specific alternative design (max 30 words) that the memories support and nobody has raised; usually empty.`;
 }
 

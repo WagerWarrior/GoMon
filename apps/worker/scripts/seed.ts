@@ -11,6 +11,7 @@ import { join, relative, resolve } from "node:path";
 import { config } from "../src/config.ts";
 import { close, cols, connect } from "../src/db.ts";
 import { BUILTIN_TEMPLATES } from "../src/templates.ts";
+import { hashPassword } from "../src/auth.ts";
 import { ITEM_KINDS, type ItemKind, type Memory } from "../src/shapes.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -73,6 +74,28 @@ const policies: [string, string[]][] = [
 ];
 for (const [action, allowedRoles] of policies) {
   await c.policies.updateOne({ teamId: T, projectId: P, action }, { $set: { allowedRoles, ...syn } }, { upsert: true });
+}
+
+// Users (Atlas): demo password from DEMO_PASSWORD (default "gomon-demo"); synthetic emails. displayNames map Meet names to users.
+const demoPassword = process.env.DEMO_PASSWORD || "gomon-demo";
+const users: { _id: string; email: string; name: string; role: string; displayNames: string[] }[] = [
+  { _id: "u-rob", email: "rob@gomon.dev", name: "Robert Reder", role: "lead", displayNames: ["Robert Reder", "Rob", "Robert"] },
+  { _id: "u-max", email: "max@gomon.dev", name: "Max Naidenov", role: "engineer", displayNames: ["Max Naidenov", "Max"] },
+  { _id: "u-tamir", email: "tamir@gomon.dev", name: "Tamir Azbel", role: "engineer", displayNames: ["Tamir Azbel", "Tamir"] },
+];
+for (const u of users) {
+  const { _id, ...rest } = u;
+  await c.users.updateOne(
+    { _id: _id as never },
+    { $set: { ...rest, teamId: T, displayNamesLower: u.displayNames.map((n) => n.toLowerCase()), ...syn }, $setOnInsert: { passwordHash: await hashPassword(demoPassword), createdAt: new Date() } },
+    { upsert: true },
+  );
+}
+// Backfill: existing calls get participantUserIds from their participants' display names.
+for (const call of await c.calls.find({ teamId: T }, { projection: { participants: 1 } }).toArray()) {
+  const names = ((call.participants as string[] | undefined) ?? []).map((n) => n.toLowerCase());
+  const ids = users.filter((u) => u.displayNames.some((d) => names.includes(d.toLowerCase()))).map((u) => u._id);
+  if (ids.length) await c.calls.updateOne({ _id: call._id }, { $addToSet: { participantUserIds: { $each: ids } } });
 }
 
 for (const { _id, ...t } of BUILTIN_TEMPLATES) {

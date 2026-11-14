@@ -8,12 +8,20 @@ import { retrieve, type Retrieved } from "./retrieve.ts";
 import type { CallItem, ItemKind, Say, Utterance } from "./shapes.ts";
 import { parseWake } from "./wake.ts";
 import { SPEAKING, templateFor } from "./templates.ts";
+import { postToMeetingChat, resolveLink } from "./links.ts";
 
 export type Stored = Utterance & { _id: ObjectId };
 
 const RECENT_TURNS = 8;
 /** Exact text the bot page pre-caches (SAY_PRECACHE="On it."); change only together with apps/bot-page. */
 export const ACK_TEXT = "On it.";
+const NOTHING_IN_MEMORY = "Nothing in team memory on that yet.";
+const LINK_REQUEST = /\b(link|url|github|issue|ticket|repo|repository|slack thread|pull request|pr)\b/i;
+
+/** Live agent state on the call document (listening | thinking | searching | answering), for the bot tile and the workspace. */
+async function setState(ctx: Ctx, callId: string, state: "listening" | "thinking" | "searching" | "answering", detail: string): Promise<void> {
+  await ctx.c.calls.updateOne({ _id: callId as never }, { $set: { agentState: { state, detail, at: new Date() } } });
+}
 /** Kinds that consensus may promote to canonical memory. Alternatives, risks, questions and actions stay as call items. */
 const LOCKABLE_KINDS: ItemKind[] = ["decision", "requirement", "constraint", "interface"];
 
@@ -76,6 +84,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   if (wakes.length) await say(ctx, u.callId, ACK_TEXT, "ack", "normal", u._id);
 
   const tR = Date.now();
+  await setState(ctx, u.callId, wakes.length ? "searching" : "thinking", wakes.length ? "searching team memory" : "reading the conversation");
   const query = batch.map((b) => b.text).join(" ").slice(-600);
   const memories: Retrieved[] = memoryEnabled ? await retrieve(ctx.c, ctx, query) : [];
   const retrieveMs = Date.now() - tR;
@@ -90,6 +99,13 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     { persona: tpl.persona, captureKinds: tpl.captureKinds },
   );
   if (wakes.length) a.addressed = true;
+  // Link requests are actions, not questions: if someone addressed Gomon and asked for a link, run share_link even when the
+  // model chose to answer in words. A spoken key ("d 15") becomes the memory to look up.
+  const lastWake = wakes[wakes.length - 1];
+  if (lastWake && a.command.type === "none" && LINK_REQUEST.test(lastWake.w.rest)) {
+    const key = /\b([a-z])[\s-]?(\d{1,3})\b/i.exec(lastWake.w.rest);
+    a.command = { type: "share_link", memoryId: key ? `${key[1].toUpperCase()}-${key[2].padStart(2, "0")}` : "", itemRef: "", newText: "", query: lastWake.w.rest };
+  }
   const analyzeMs = Date.now() - tA;
   const now = new Date();
 
@@ -161,28 +177,46 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     if (cmd.type === "lock_item") {
       const id = resolveRef(cmd.itemRef, created, open);
       const mem = id ? await promoteItem(ctx, id, speaker, "voice") : null;
-      if (mem) await say(ctx, u.callId, `Locked as ${mem.key}.`, "lock_done", "normal", u._id);
+      if (mem) await say(ctx, u.callId, `Got it, that's locked as ${mem.key}.`, "lock_done", "normal", u._id);
     } else if (cmd.type === "create_tickets" || cmd.type === "post_slack") {
       const type = cmd.type === "create_tickets" ? "create_issue" : "post_slack";
       const r = await enqueueForCall(ctx, type, u.callId, speaker);
-      const what = type === "create_issue" ? "GitHub issue" : "Slack post";
-      await say(ctx, u.callId, r.queued ? `Queued ${r.queued} ${what}${r.queued > 1 ? "s" : ""}.` : r.existing ? `Those are already queued.` : `There are no locked decisions from this call yet.`, "command", "normal", u._id);
+      const what = type === "create_issue" ? (r.queued > 1 ? `${r.queued} GitHub issues` : "the GitHub issue") : "the Slack update";
+      await say(ctx, u.callId, r.queued ? `On it, filing ${what} now.` : r.existing ? `Already done, those went out earlier.` : `Nothing's locked on this call yet, so there's nothing to file.`, "command", "normal", u._id);
     } else if (cmd.type === "correct_memory") {
       const id = (await resolveMemory(ctx, cmd.memoryId, memories))?._id;
       const mem = id && cmd.newText ? await correctMemory(ctx, id, cmd.newText, speaker, u.callId) : null;
-      if (mem) await say(ctx, u.callId, `Corrected ${mem.key ?? "that"}; version ${mem.version} is now the record.`, "command", "normal", u._id);
+      if (mem) await say(ctx, u.callId, `Updated ${mem.key ?? "that"}. I kept the old version in the history.`, "command", "normal", u._id);
     } else if (cmd.type === "forget_memory") {
       const id = (await resolveMemory(ctx, cmd.memoryId, memories))?._id;
       const mem = id ? await forgetMemory(ctx, id, speaker, u.callId) : null;
-      if (mem) await say(ctx, u.callId, `Forgotten ${mem.key ?? "that"}. History is kept for audit.`, "command", "normal", u._id);
+      if (mem) await say(ctx, u.callId, `Okay, ${mem.key ?? "that"} is forgotten. It stays in the audit log.`, "command", "normal", u._id);
+    } else if (cmd.type === "share_link") {
+      const mem = cmd.memoryId ? await resolveMemory(ctx, cmd.memoryId, memories) : null;
+      const link = await resolveLink(ctx, u.callId, mem, cmd.query || cmd.memoryId);
+      if (!link) await say(ctx, u.callId, "I couldn't find a link for that yet.", "command", "normal", u._id);
+      else {
+        const posted = await postToMeetingChat(ctx, u.callId, `${link.label}: ${link.url}`, link);
+        await say(ctx, u.callId, posted ? "Dropped the link in the chat." : "I put the link in the workspace, the meeting chat didn't take it.", "command", "normal", u._id);
+      }
     }
   } catch (e) {
     if (!(e instanceof PolicyDenied)) throw e;
-    await say(ctx, u.callId, `I can't do that for ${speaker}: ${e.result.reason}.`, "command", "normal", u._id);
+    await say(ctx, u.callId, `Sorry ${speaker.split(" ")[0]}, I can't do that: ${e.result.reason}.`, "command", "normal", u._id);
   }
 
-  // 6. Direct answer when addressed (skip if a command already produced the response).
-  if (a.addressed && a.reply && a.command.type === "none") await say(ctx, u.callId, a.reply, "addressed", "high", u._id);
+  // 6. Direct answer when addressed (skip if a command already produced the response). Grounding is enforced, not just asked:
+  //    a reply is spoken only if it cites a real active memory key, or is the exact "nothing in memory" line.
+  if (a.addressed && a.reply && a.command.type === "none") {
+    const cited = [...a.reply.matchAll(/\b([A-Z])-(\d{2,3})\b/g)].map((m) => m[0]);
+    const valid = cited.length
+      ? await ctx.c.memories.countDocuments({ teamId: ctx.teamId, projectId: ctx.projectId, status: "active", key: { $in: cited } })
+      : 0;
+    const grounded = valid > 0 || a.reply.startsWith(NOTHING_IN_MEMORY);
+    await setState(ctx, u.callId, "answering", grounded ? "answering from team memory" : "no grounded answer");
+    await say(ctx, u.callId, grounded ? a.reply : `${NOTHING_IN_MEMORY} Want me to log it as an open question?`, "addressed", "high", u._id);
+    if (!grounded) await ctx.c.agentEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "ungrounded_reply_dropped", reply: a.reply, cited });
+  }
 
   // 7. Rare proactive alternative, rate-limited per call.
   if (a.suggestion && !a.addressed && rules.suggestionWindowMs !== null) {
@@ -190,6 +224,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     if (!last) await say(ctx, u.callId, a.suggestion, "suggestion", "normal", u._id);
   }
 
+  await setState(ctx, u.callId, "listening", "listening");
   const totalMs = Date.now() - t0;
   await Promise.all([
     ctx.c.agentEvents.insertOne({
