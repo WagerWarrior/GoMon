@@ -12,8 +12,9 @@ import { MongoServerError, type ObjectId, type ResumeToken } from "mongodb";
 import { config } from "./config.ts";
 import { cols, connect } from "./db.ts";
 import { handleBatch, sweepLocks, type Stored } from "./agent.ts";
-import type { Ctx } from "./governance.ts";
-import type { Say, Utterance } from "./shapes.ts";
+import { checkPolicy, type Ctx } from "./governance.ts";
+import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
+import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -96,12 +97,12 @@ function send(res: ServerResponse, status: number, data: unknown): void {
 }
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
-async function ensureCall(callId: string, title?: string, speaker?: string, meetingUrl?: string): Promise<number> {
+async function ensureCall(callId: string, title?: string, speaker?: string, meetingUrl?: string, templateId?: string): Promise<number> {
   const call = await c.calls.findOneAndUpdate(
     { _id: callId as never },
     {
       $inc: { utteranceSeq: speaker ? 1 : 0 },
-      $setOnInsert: { teamId: config.teamId, projectId: config.projectId, title: title ?? "Design call", status: "live", startedAt: new Date(), memoryEnabled: true, ...(meetingUrl ? { meetingUrl } : {}) },
+      $setOnInsert: { teamId: config.teamId, projectId: config.projectId, title: title ?? "Design call", status: "live", startedAt: new Date(), memoryEnabled: true, templateId: templateId ?? DEFAULT_TEMPLATE_ID, ...(meetingUrl ? { meetingUrl } : {}) },
       ...(speaker ? { $addToSet: { participants: speaker } } : {}),
     },
     { upsert: true, returnDocument: "after" },
@@ -131,7 +132,7 @@ async function postUtterance(b: Record<string, unknown>) {
 
 function streamSays(req: IncomingMessage, res: ServerResponse, callId: string): void {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive", "access-control-allow-origin": "*" });
-  const emit = (s: Say) => res.write(`event: say\ndata: ${JSON.stringify({ sayId: s.sayId, text: s.text, priority: s.priority, reason: s.reason, createdAt: s.createdAt })}\n\n`);
+  const emit = (s: Say) => res.write(`event: say\ndata: ${JSON.stringify({ sayId: s.sayId, text: s.text, priority: s.priority, reason: s.reason, createdAt: s.createdAt, ...(s.voiceId ? { voiceId: s.voiceId } : {}) })}\n\n`);
   void c.says.find({ callId, status: "queued" }).sort({ createdAt: 1 }).forEach((s) => { emit(s); });
   const cs = c.says.watch([{ $match: { operationType: "insert", "fullDocument.callId": callId } }]);
   cs.on("change", (ev) => { if (ev.operationType === "insert") emit(ev.fullDocument); });
@@ -139,10 +140,48 @@ function streamSays(req: IncomingMessage, res: ServerResponse, callId: string): 
   req.on("close", () => { clearInterval(ka); void cs.close(); });
 }
 
+async function audit(type: string, actor: string, reason: string, ref: Record<string, unknown>, callId?: string): Promise<void> {
+  await c.auditEvents.insertOne({ teamId: config.teamId, projectId: config.projectId, at: new Date(), type, actor, reason, ref, ...(callId ? { callId } : {}) });
+}
+
+/** Create (no id) or update (id) an agent template. Leads only (policy manage_templates); every change is versioned and audited. */
+async function saveTemplate(b: Record<string, unknown>, id?: string): Promise<{ status: number; data: unknown }> {
+  const actor = str(b.actor);
+  if (!actor) return { status: 400, data: { error: "actor required" } };
+  const parsed = parseTemplateInput(b);
+  if (!parsed.ok) return { status: 400, data: { error: "invalid template", details: parsed.errors } };
+  const policy = await checkPolicy(ctx, actor, "manage_templates");
+  if (!policy.allowed) {
+    await audit("policy_denied", actor, policy.reason, { action: "manage_templates", templateId: id });
+    return { status: 403, data: { error: "policy_denied", reason: policy.reason } };
+  }
+  const now = new Date();
+  if (id) {
+    const r = await c.agentTemplates.findOneAndUpdate(
+      { _id: id, teamId: config.teamId },
+      { $set: { ...parsed.value, updatedAt: now, updatedBy: actor }, $inc: { version: 1 } },
+      { returnDocument: "after" },
+    );
+    if (!r) return { status: 404, data: { error: "not found" } };
+    await audit("template_updated", actor, `${r.name} v${r.version}`, { templateId: id, version: r.version });
+    return { status: 200, data: r };
+  }
+  const slug = parsed.value.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "template";
+  const doc: AgentTemplate = { _id: `${slug}-${randomUUID().slice(0, 4)}`, teamId: config.teamId, ...parsed.value, version: 1, createdAt: now, updatedAt: now, updatedBy: actor };
+  try {
+    await c.agentTemplates.insertOne(doc);
+  } catch (e) {
+    if (e instanceof MongoServerError && e.code === 11000) return { status: 409, data: { error: `a template named "${doc.name}" already exists` } };
+    throw e;
+  }
+  await audit("template_created", actor, doc.name, { templateId: doc._id });
+  return { status: 201, data: doc };
+}
+
 const server = createServer(async (req, res) => {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-headers", "content-type, authorization");
-  res.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
+  res.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, OPTIONS");
   if (req.method === "OPTIONS") return void res.writeHead(204).end();
   const url = new URL(req.url ?? "/", "http://localhost");
   if (config.workerToken) {
@@ -157,16 +196,39 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/api/calls") {
       const b = await body(req);
+      const templateId = str(b.templateId);
+      if (templateId && !(await c.agentTemplates.findOne({ _id: templateId, teamId: config.teamId }))) return send(res, 400, { error: `unknown template ${templateId}` });
       const callId = str(b.callId) ?? `call-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}-${randomUUID().slice(0, 4)}`;
-      await ensureCall(callId, str(b.title), undefined, str(b.meetingUrl));
-      return send(res, 201, { callId });
+      await ensureCall(callId, str(b.title), undefined, str(b.meetingUrl), templateId);
+      return send(res, 201, { callId, templateId: templateId ?? DEFAULT_TEMPLATE_ID });
     }
     const callMatch = /^\/api\/calls\/([^/]+)$/.exec(url.pathname);
     if (req.method === "PATCH" && callMatch) {
       const b = await body(req);
-      if (typeof b.memoryEnabled !== "boolean") return send(res, 400, { error: "memoryEnabled boolean required" });
-      const r = await c.calls.updateOne({ _id: decodeURIComponent(callMatch[1]) as never }, { $set: { memoryEnabled: b.memoryEnabled } });
-      return send(res, r.matchedCount ? 200 : 404, { memoryEnabled: b.memoryEnabled });
+      const callId = decodeURIComponent(callMatch[1]);
+      const set: Record<string, unknown> = {};
+      if (typeof b.memoryEnabled === "boolean") set.memoryEnabled = b.memoryEnabled;
+      const templateId = str(b.templateId);
+      if (templateId) {
+        if (!(await c.agentTemplates.findOne({ _id: templateId, teamId: config.teamId }))) return send(res, 400, { error: `unknown template ${templateId}` });
+        set.templateId = templateId;
+      }
+      if (!Object.keys(set).length) return send(res, 400, { error: "memoryEnabled (boolean) or templateId required" });
+      const r = await c.calls.updateOne({ _id: callId as never }, { $set: set });
+      if (r.matchedCount && templateId) await audit("template_assigned", str(b.actor) ?? "workspace", templateId, { templateId }, callId);
+      return send(res, r.matchedCount ? 200 : 404, set);
+    }
+    if (req.method === "GET" && url.pathname === "/api/templates") {
+      return send(res, 200, await c.agentTemplates.find({ teamId: config.teamId }).sort({ name: 1 }).toArray());
+    }
+    if (req.method === "POST" && url.pathname === "/api/templates") {
+      const r = await saveTemplate(await body(req));
+      return send(res, r.status, r.data);
+    }
+    const tplMatch = /^\/api\/templates\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "PUT" && tplMatch) {
+      const r = await saveTemplate(await body(req), decodeURIComponent(tplMatch[1]));
+      return send(res, r.status, r.data);
     }
     if (req.method === "GET" && url.pathname === "/api/says/stream") {
       const callId = url.searchParams.get("callId");

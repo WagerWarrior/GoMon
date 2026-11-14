@@ -1,6 +1,6 @@
 import { MongoClient, type Collection, type Db, type Document } from "mongodb";
 import { config } from "./config.ts";
-import type { AuditEvent, CallItem, Conflict, Memory, Say, Utterance } from "./shapes.ts";
+import type { AgentTemplate, AuditEvent, CallItem, Conflict, Memory, Say, Utterance } from "./shapes.ts";
 
 let client: MongoClient | undefined;
 
@@ -35,6 +35,7 @@ export interface Cols {
   says: Collection<Say>;
   counters: Collection<{ _id: string; n: number }>;
   streamOffsets: Collection<{ _id: string; token: unknown; at: Date }>;
+  agentTemplates: Collection<AgentTemplate>;
 }
 
 export function cols(db: Db): Cols {
@@ -55,5 +56,6 @@ export function cols(db: Db): Cols {
     says: db.collection<Say>("says"),
     counters: db.collection<{ _id: string; n: number }>("counters"),
     streamOffsets: db.collection<{ _id: string; token: unknown; at: Date }>("stream_offsets"),
+    agentTemplates: db.collection<AgentTemplate>("agent_templates"),
   };
 }

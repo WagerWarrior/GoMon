@@ -37,6 +37,27 @@ Reads the repo-root `.env` (`MONGODB_URI`, `LLM_API_KEY`, `TEAM_ID`, `PROJECT_ID
   so voice and UI can never file the same decision version twice.
 - Policy actions used: `lock_decision`, `correct_memory`, `forget_memory` (leads only), `create_issue`, `post_slack`.
 
+## Agent templates (`agent_templates`, `calls.templateId`)
+A template decides how Gomon behaves on a call; the worker reloads it every batch (5 s cache), so switching mid-call works.
+| Field | Effect |
+|---|---|
+| `persona` | Added to the analysis prompt |
+| `captureKinds` | Which call-item kinds are captured (others are dropped) |
+| `proactivity` | `quiet`: speaks only when addressed (conflicts still recorded, `spoken:false`). `balanced`: 1 spoken conflict per batch, suggestions ≤ 1 / 5 min. `active`: 2 per batch, suggestions ≤ 1 / 2 min |
+| `consensus` | `announce_veto`: "Locking in…" + veto window. `explicit_only`: locks only on "lock it in" or a workspace click |
+| `vetoMs` | Veto window for consensus locks (3–60 s) |
+| `voiceId` | ElevenLabs voice; stamped on every `says` row and in the SSE payload (`voiceId`). Bot page: use it when present |
+
+Seeded: `design-review` (default), `silent-scribe`, `architecture-challenger`. Validator on the collection; unique `(teamId, name)`.
+Endpoints (Max: for the templates page and the per-call dropdown):
+- `GET /api/templates` list. `POST /api/templates` create, `PUT /api/templates/:id` update (`version` +1). Body: `{ actor, name,
+  description, persona, proactivity, consensus, vetoMs, captureKinds[], voiceId? }`. Policy `manage_templates` (leads only);
+  denials and changes are audited (`template_created`, `template_updated`, `policy_denied`). Invalid input → 400 with `details[]`.
+- `POST /api/calls { callId?, title?, meetingUrl?, templateId? }`; `PATCH /api/calls/:id { templateId?, memoryEnabled?, actor? }`
+  (`template_assigned` audit). Unknown template → 400.
+Verified live: silent-scribe recorded D-12/R-12 conflicts without speaking and answered when addressed; design-review spoke one;
+engineer create denied and audited; lead create succeeded; a template `voiceId` reaches `says`.
+
 ## Answers to MAX_NOTES questions
 1. **One database: `gomon`.** Call scratch (`call_items`, TTL) and canonical memory (`memories`) live in the same database, so
    promotion, its audit row, and outbox entries share one transaction. Please point the workspace and connectors at

@@ -10,6 +10,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { config } from "../src/config.ts";
 import { close, cols, connect } from "../src/db.ts";
+import { BUILTIN_TEMPLATES } from "../src/templates.ts";
 import { ITEM_KINDS, type ItemKind, type Memory } from "../src/shapes.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -68,10 +69,15 @@ await c.members.updateOne({ teamId: OTHER_TEAM, displayName: "Ana" }, { $setOnIn
 
 const policies: [string, string[]][] = [
   ["lock_decision", ["lead", "engineer"]], ["correct_memory", ["lead", "engineer"]], ["forget_memory", ["lead"]],
-  ["create_issue", ["lead", "engineer"]], ["post_slack", ["lead", "engineer"]],
+  ["create_issue", ["lead", "engineer"]], ["post_slack", ["lead", "engineer"]], ["manage_templates", ["lead"]],
 ];
 for (const [action, allowedRoles] of policies) {
   await c.policies.updateOne({ teamId: T, projectId: P, action }, { $set: { allowedRoles, ...syn } }, { upsert: true });
+}
+
+for (const { _id, ...t } of BUILTIN_TEMPLATES) {
+  const now = new Date();
+  await c.agentTemplates.updateOne({ _id }, { $setOnInsert: { ...t, teamId: T, version: 1, createdAt: now, updatedAt: now, updatedBy: "seed", ...syn } }, { upsert: true });
 }
 
 async function seedMemories(teamId: string, projectId: string, items: Parsed[]) {
@@ -91,5 +97,5 @@ async function seedMemories(teamId: string, projectId: string, items: Parsed[]) 
 const mine = await parseDir("seed/context");
 const other = await parseDir("seed/other-team");
 console.log(`memories: +${await seedMemories(T, P, mine)} of ${mine.length} for ${T}/${P}; +${await seedMemories(OTHER_TEAM, OTHER_PROJECT, other)} of ${other.length} for ${OTHER_TEAM}`);
-console.log(`members: ${members.length}, policies: ${policies.length} (all synthetic: true)`);
+console.log(`members: ${members.length}, policies: ${policies.length}, agent templates: ${BUILTIN_TEMPLATES.length} (all synthetic: true)`);
 await close();

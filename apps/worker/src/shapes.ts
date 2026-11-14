@@ -74,9 +74,33 @@ export type Say = {
   status: "queued" | "started" | "done" | "failed" | "cancelled";
   createdAt: Date; updatedAt: Date;
   utteranceId?: ObjectId;
+  /** ElevenLabs voice from the call's agent template; the bot page falls back to ELEVENLABS_VOICE_ID when absent. */
+  voiceId?: string;
 };
 
 export type AuditEvent = {
   callId?: string; teamId: string; projectId: string;
   at: Date; type: string; actor: string; reason: string; ref?: Record<string, unknown>;
+};
+
+/**
+ * Agent template: how Gomon behaves on a call. A call points at one with `calls.templateId`; the worker loads it per batch.
+ * proactivity: quiet = speaks only when addressed; balanced = one high-severity conflict per batch + rare suggestions;
+ * active = conflicts plus more frequent suggestions. consensus: announce_veto = "Locking in…" with a veto window;
+ * explicit_only = locks only on "lock it in" or a human click.
+ */
+export type AgentTemplate = {
+  _id: string;
+  teamId: string;
+  name: string;
+  description: string;
+  persona: string;
+  proactivity: "quiet" | "balanced" | "active";
+  consensus: "announce_veto" | "explicit_only";
+  vetoMs: number;
+  captureKinds: ItemKind[];
+  voiceId?: string;
+  version: number;
+  createdAt: Date; updatedAt: Date; updatedBy: string;
+  synthetic?: boolean;
 };

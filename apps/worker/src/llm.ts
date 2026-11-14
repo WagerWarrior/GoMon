@@ -49,8 +49,10 @@ const SCHEMA = {
   },
 } as const;
 
-function system(name: string): string {
+function system(name: string, persona: string, kinds: readonly string[]): string {
   return `You are ${name}, an AI participant in a live engineering design call. You read the newest committed utterances (one or more).
+Persona for this call: ${persona}
+Capture only these item kinds: ${kinds.join(", ")}.
 Transcripts come from live speech-to-text: often lowercase, unpunctuated, and split mid-thought across utterances. Read them together.
 Return JSON only, matching the schema. Be conservative and BRIEF (latency matters): an empty result is correct for small talk and filler.
 
@@ -94,15 +96,17 @@ function user(recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories
 
 type MessagesResponse = { content?: { type: string; text?: string }[]; stop_reason?: string; error?: { message: string }; usage?: unknown };
 
+export type TemplateHints = { persona: string; captureKinds: readonly string[] };
+
 export const analyze = traceable(
-  async (recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[]): Promise<Analysis> => {
+  async (recent: TurnLine[], batch: TurnLine[], items: OpenItem[], memories: MemoryLine[], wake: { id: string; heardAs: string }[], tpl: TemplateHints): Promise<Analysis> => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": config.llmKey(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({
         model: config.analyzeModel,
         max_tokens: 2048,
-        system: system(config.agentName),
+        system: system(config.agentName, tpl.persona, tpl.captureKinds),
         messages: [{ role: "user", content: user(recent, batch, items, memories, wake) }],
         output_config: { format: { type: "json_schema", schema: SCHEMA } },
       }),

@@ -107,12 +107,27 @@ console.log(`Atlas ${(await db.admin().command({ buildInfo: 1 })).version}, data
 await ensureCollection(db, "memories", memoriesValidator);
 await ensureCollection(db, "actions", actionsValidator);
 await ensureCollection(db, "call_items", callItemsValidator);
+await ensureCollection(db, "agent_templates", {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["teamId", "name", "persona", "proactivity", "consensus", "vetoMs", "captureKinds", "version"],
+    properties: {
+      name: { bsonType: "string", minLength: 1, maxLength: 60 },
+      persona: { bsonType: "string", maxLength: 600 },
+      proactivity: { enum: ["quiet", "balanced", "active"] },
+      consensus: { enum: ["announce_veto", "explicit_only"] },
+      vetoMs: { bsonType: ["int", "long", "double"], minimum: 3000, maximum: 60000 },
+      captureKinds: { bsonType: "array", minItems: 1, items: { enum: [...ITEM_KINDS] } },
+    },
+  },
+});
 for (const n of ["teams", "projects", "members", "policies", "calls", "utterances", "conflicts", "audit_events",
   "agent_events", "timings", "says", "counters", "stream_offsets"]) await ensureCollection(db, n);
 
 const ix = (coll: string, spec: Document, opts: Document = {}) => db.collection(coll).createIndex(spec, opts);
 await Promise.all([
   ix("members", { teamId: 1, displayName: 1 }, { unique: true }),
+  ix("agent_templates", { teamId: 1, name: 1 }, { unique: true }),
   ix("policies", { teamId: 1, projectId: 1, action: 1 }),
   ix("utterances", { callId: 1, sourceKey: 1 }, { unique: true }),
   ix("utterances", { callId: 1, seq: 1 }),

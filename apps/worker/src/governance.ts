@@ -7,7 +7,8 @@ import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import type { Cols } from "./db.ts";
 import type { AuditEvent, CallItem, ItemKind, Memory } from "./shapes.ts";
 
-export type Ctx = { client: MongoClient; c: Cols; teamId: string; projectId: string };
+/** `voiceId` is the call's agent-template voice, stamped onto every `says` row written with this context. */
+export type Ctx = { client: MongoClient; c: Cols; teamId: string; projectId: string; voiceId?: string };
 export type PolicyResult = { allowed: boolean; reason: string; policyId?: string; checkedAt: Date };
 export class PolicyDenied extends Error {
   constructor(public result: PolicyResult) { super(result.reason); }
