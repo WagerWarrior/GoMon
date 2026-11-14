@@ -27,6 +27,7 @@ import { createProjectWithBoard } from "./projects.ts";
 import { COMPANY_PROJECT } from "./scope.ts";
 import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
+import { handleAgentApi } from "./agentapi.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
 import { sweepSpeakers } from "./speakers.ts";
 import { watchChatRequests } from "./chat-requests.ts";
@@ -417,6 +418,8 @@ const server = createServer(async (req, res) => {
   }
   try {
     if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true, db: config.dbName, team: config.teamId, project: config.projectId });
+    // Read-only JSON for agents (agentapi.ts): the call, memory index, tickets, calls, transcript, people.
+    if (await handleAgentApi(req, res, url, c, config.teamId)) return;
     if (req.method === "POST" && url.pathname === "/api/utterances") {
       const r = await postUtterance(await body(req));
       return send(res, r.status, r.data);
