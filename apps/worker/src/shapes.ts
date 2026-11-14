@@ -28,6 +28,8 @@ export type Utterance = {
   followUp?: boolean;
   /** A wake line held because its question was cut off (hold.ts); the next sentence carries it. */
   heldAsk?: boolean;
+  /** The full request when it is spread over more than this line (the name said after it, or a reply to Gomon's offer). */
+  askedText?: string;
 };
 
 export type CallItem = {

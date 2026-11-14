@@ -36,4 +36,30 @@ export function traceLine(name: string, t: Trace): string {
   return `${name} answered in ${secs(t.totalMs)}  |  ${steps.join("  |  ")}`;
 }
 
+/**
+ * The thinking steps, posted while Gomon works (Max, Nov 14: "if I know its thinking stream I don't have to bother it"):
+ * one line when it starts searching, one when the searches are back, one when the answer is out. Pure.
+ */
+export function stepSearching(name: string, memoryOn: boolean): string {
+  return memoryOn
+    ? `${name} is thinking: searching Atlas memory, past meetings and GitHub tickets…`
+    : `${name} is thinking: memory is off for this call, reading the call and GitHub tickets…`;
+}
+
+export function stepFound(name: string, t: Pick<Trace, "memoryOn" | "memoryKeys" | "knowledgeHits" | "openIssues" | "records">, unassigned: number): string {
+  const shown = t.memoryKeys.slice(0, 4).join(", ");
+  const more = t.memoryKeys.length > 4 ? `, +${t.memoryKeys.length - 4}` : "";
+  const parts = [
+    ...(t.memoryOn ? [t.memoryKeys.length ? `${t.memoryKeys.length} memories (${shown}${more})` : "no matching memories", `${t.knowledgeHits} past-meeting ${t.knowledgeHits === 1 ? "hit" : "hits"}`] : []),
+    `${t.openIssues} open ${t.openIssues === 1 ? "ticket" : "tickets"} (${unassigned} with nobody assigned)`,
+  ];
+  return `${name} found: ${parts.join(", ")}. Writing the answer…`;
+}
+
+export function stepDone(name: string, t: Pick<Trace, "model" | "modelMs" | "totalMs">, searchMs: number): string {
+  return `${name} answered in ${secs(t.totalMs)} (search ${secs(searchMs)}, ${modelLabel(t.model)} ${secs(t.modelMs)}).`;
+}
+
+/** CHAT_TRACE: unset = the three steps; "final" = one line after the answer; "off" = nothing. */
 export const chatTraceOn = () => process.env.CHAT_TRACE !== "off";
+export const chatSteps = () => chatTraceOn() && process.env.CHAT_TRACE !== "final";

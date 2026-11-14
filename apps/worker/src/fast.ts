@@ -20,7 +20,16 @@ import { firstSentence, issueLinks, restAfter, spokenLine } from "./speech.ts";
 import { readStream, type StreamUsage } from "./stream.ts";
 import { prerender } from "./voice.ts";
 import { postToMeetingChat } from "./links.ts";
-import { chatTraceOn, traceLine } from "./trace.ts";
+import { chatSteps, chatTraceOn, stepDone, stepFound, stepSearching, traceLine } from "./trace.ts";
+
+/** Chat lines of one call go out in the order they were written (two Recall calls can overtake each other). */
+const chatQueue = new Map<string, Promise<unknown>>();
+function chat(ctx: Ctx, callId: string, message: string): void {
+  const next = (chatQueue.get(callId) ?? Promise.resolve())
+    .then(() => postToMeetingChat(ctx, callId, message))
+    .catch((e) => console.error("[trace]", e instanceof Error ? e.message : e));
+  chatQueue.set(callId, next);
+}
 
 /** A step with its own clock, for the answer trace. */
 const timed = <T>(p: Promise<T>) => { const s = Date.now(); return p.then((v) => ({ v, ms: Date.now() - s })); };
@@ -74,6 +83,8 @@ async function answer(ctx: Ctx, u: Asked, dry: boolean, onSpeaking: () => void =
   // Everything is fetched at once. The call document used to be read first (one Atlas round trip, ~100 ms, before any search
   // started); memory is on for nearly every call, so the searches start now and are dropped if this call has it off.
   const callP = ctx.c.calls.findOne({ _id: u.callId as never }, { projection: { summary: 1, templateId: 1, memoryEnabled: 1 } });
+  const steps = !dry && chatSteps();
+  if (steps) chat(ctx, u.callId, stepSearching(config.agentName, true));
   const [call, recent, said, open, foundT, workspace, tpl, knowledgeT] = await Promise.all([
     callP,
     // The window's budgets (below) decide how much of this is kept, so more is read than the old fixed 8 turns / 4 lines.
@@ -100,7 +111,7 @@ async function answer(ctx: Ctx, u: Asked, dry: boolean, onSpeaking: () => void =
   ].sort((a, b) => a.at - b.at);
   // One budgeted window (window.ts): fixed order, a token budget per section, and a record of what went in and what was cut.
   const win = buildWindow([
-    { title: "", lines: [workspace.header], budget: 900, keep: "head" },
+    { title: "", lines: [workspace.header], budget: 1400, keep: "head" },
     { title: "CALL SO FAR", lines: typeof call?.summary === "string" && call.summary ? [call.summary] : [], budget: 250, keep: "head" },
     { title: "OPEN CALL ITEMS (said in this call, not locked yet)", lines: open.map((i) => `- [${i.status}] ${i.kind}: ${i.text}`), budget: 300, keep: "head" },
     { title: "TEAM MEMORY", lines: memories.map((m) => `- ${m.key ?? "-"} (${m.kind}): ${m.text}`), budget: 500, keep: "head", empty: "(none matched)" },
@@ -127,6 +138,14 @@ async function answer(ctx: Ctx, u: Asked, dry: boolean, onSpeaking: () => void =
     else await ctx.c.agentEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "ungrounded_reply_dropped", reply: line, cited: keys });
   };
   if (!dry) state(ctx, u.callId, "writing the answer");
+  const found1 = {
+    memoryOn, memoryKeys: memories.map((m) => String(m.key ?? "")).filter(Boolean), knowledgeHits: knowledge.length,
+    records: workspace.sources.length, openIssues: workspace.sources.filter((s) => /^issue #\d+ \[open\]/.test(s.line)).length,
+  };
+  const unassigned = workspace.sources.filter((s) => /^issue #\d+ \[open\]/.test(s.line) && /; unassigned\)$/.test(s.line)).length;
+  const searchMs = Date.now() - t0;
+  if (steps) chat(ctx, u.callId, stepFound(config.agentName, found1, unassigned));
+  else if (dry) console.error(`[ask] step: ${stepFound(config.agentName, found1, unassigned)}`);
   const tModel = Date.now();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -150,6 +169,12 @@ ${tpl.persona}
   issues ("issue #…"). TEAM MEMORY has the best matches for this question.
 - "Tickets" and "issues" mean the team's GitHub issues, whenever they were filed, not only on this call. "issue #25 [open]
   filed by you from memory D-09" is a ticket you filed; [open] ones are the outstanding ones. Count and name them from TEAM RECORDS.
+- Who has which ticket is already worked out at the top: WITH NOBODY ASSIGNED and ASSIGNED. Asked for unassigned tickets,
+  name only ones from WITH NOBODY ASSIGNED; asked who has a ticket, read ASSIGNED. Never guess an assignee.
+- Asked who can take a ticket, name only the people in WHO A TICKET CAN BE ASSIGNED TO (they are the ones with GitHub
+  accounts), whatever the memories say about who owns the area.
+- You cannot change anything in this turn: no assigning, filing, closing or locking. Never say you are doing it, did it or
+  will do it. If that is what is wanted, give the words to say, for example: Say "Hey Gomon, assign issue 24 to Max."
 - A key someone names is a memory key: if it is not in TEAM RECORDS, say it doesn't exist yet and name the latest key of that kind.
 - When you name a GitHub issue by number, its link is posted in the Meet chat for you: say "it's in the chat", never the link.
 - The question may come before or after your name, and speech-to-text may mishear words: read RECENT TURNS for intent.
@@ -254,7 +279,8 @@ ${tpl.persona}
   }
   if (firstMs !== null) void ctx.c.timings.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, stage: "fast_first_sentence", ms: firstMs, at: new Date(), utteranceId: u._id }).catch(() => {});
   // After the voice is queued, so the trace never delays the answer.
-  if (chatTraceOn()) void postToMeetingChat(ctx, u.callId, trace).catch((e) => console.error("[trace]", e instanceof Error ? e.message : e));
+  if (steps) chat(ctx, u.callId, stepDone(config.agentName, { model: config.analyzeModel, modelMs, totalMs: Date.now() - t0 }, searchMs));
+  else if (chatTraceOn()) chat(ctx, u.callId, trace);
   await ctx.c.timings.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, stage: "fast_reply", ms: Date.now() - t0, at: new Date(), utteranceId: u._id });
   return text;
 }

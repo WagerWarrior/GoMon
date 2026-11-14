@@ -29,7 +29,7 @@ import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
 import { handleAgentApi } from "./agentapi.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
-import { releaseHeld, routeAsk } from "./hold.ts";
+import { releaseHeld, routeAsk, nameOnly, offeredAction, trailingAsk, TRAIL_MS } from "./hold.ts";
 import { sweepSpeakers } from "./speakers.ts";
 import { watchChatRequests } from "./chat-requests.ts";
 
@@ -201,17 +201,34 @@ async function postUtterance(b: Record<string, unknown>) {
   const woke = parseWake(text).addressed;
   const followUp = FOLLOW_UP_MS > 0 && !woke && FOLLOW_UP.test(bare)
     && !!(await c.says.findOne({ callId, reason: { $in: ["addressed", "command"] }, createdAt: { $gte: new Date(Date.now() - FOLLOW_UP_MS) } }));
+  // What Gomon last said, and the lines just before this one: needed when the name is said after the request, or twice.
+  let trailing = "", duplicateName = false, offer = "";
+  if (woke) {
+    const [prior, lastSay] = await Promise.all([
+      nameOnly(text) ? c.utterances.find({ callId, seq: { $lt: seq }, receivedAt: { $gte: new Date(Date.now() - TRAIL_MS) } }).sort({ seq: -1 }).limit(4).toArray() : Promise.resolve([]),
+      c.says.find({ callId, reason: { $in: ["addressed", "command"] } }).sort({ createdAt: -1 }).limit(1).next(),
+    ]);
+    if (nameOnly(text)) {
+      const t = trailingAsk(prior.map((p) => ({ speaker: p.speaker.displayName, text: p.text, at: p.receivedAt.getTime() })), speakerName, lastSay?.createdAt.getTime() ?? 0);
+      trailing = t.ask; duplicateName = t.duplicate;
+    }
+    // "Want me to assign issue 24 to someone?" … "Max. Hey, Gomon.": the reply is an action, so it goes to the action lane
+    // with the offer in front of it. Live (Nov 14) the answer lane said "assigning it now" and nothing was assigned.
+    if (lastSay && Date.now() - lastSay.createdAt.getTime() < 60_000 && offeredAction(lastSay.text)) offer = lastSay.text;
+  }
   // A cut-off ask ("Hey, Gomon." / "hey Gomon, can you like-") is held; the next sentence from the same speaker is its question.
-  const route = routeAsk(callId, speakerName, text);
-  const asked = route.carried ? `${route.carried} ${text}` : text;
-  const fast = !route.hold && wantsFastReply(followUp ? `Gomon, ${bare}` : asked);
+  const route = trailing || duplicateName ? { hold: false, carried: null } : routeAsk(callId, speakerName, text);
+  const said = trailing ? `${trailing} ${text}` : route.carried ? `${route.carried} ${text}` : text;
+  const asked = offer && !route.hold ? `(Replying to your offer: "${offer}") ${said}` : said;
+  const fast = !route.hold && !duplicateName && !offer && wantsFastReply(followUp ? `Gomon, ${bare}` : asked);
   const doc: Utterance = {
     callId, teamId: config.teamId, projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
     // Held by the ingesting worker: a stray or older worker sees it as claimed (they skip claimedAt) and never splits the call.
     claimedAt: new Date(), heldBy: WORKER_ID,
     // A held fragment is marked like a fast-lane line, so the batch analysis does not answer it either.
-    ...(fast || route.hold ? { fastReply: true } : {}),
+    ...(fast || route.hold || duplicateName ? { fastReply: true } : {}),
+    ...(asked !== text ? { askedText: asked } : {}),
     // A carried line counts as addressed in the batch analysis too ("Hey, Gomon." + "Create the tickets.").
     ...(followUp || route.carried ? { followUp: true } : {}),
     ...(route.hold ? { heldAsk: true } : {}),
@@ -220,7 +237,7 @@ async function postUtterance(b: Record<string, unknown>) {
   try {
     const r = await c.utterances.insertOne(doc);
     // Heard its name: confirm at once (chime in the meeting, Thinking card, state line), before any model call.
-    if (woke && source !== "typed") void heard(c, callId, speakerName).catch((e) => console.error("[heard]", e instanceof Error ? e.message : e));
+    if (woke && !duplicateName && source !== "typed") void heard(c, callId, speakerName).catch((e) => console.error("[heard]", e instanceof Error ? e.message : e));
     // Questions to Gomon are answered now, not after the queue and the full analysis.
     const answerNow = (t: string) => void callCtx(callId).then((cx) => fastReply(cx, { _id: r.insertedId, callId, seq, text: t, speaker: doc.speaker })).catch((e) => console.error("[fast]", e instanceof Error ? e.message : e));
     if (fast) answerNow(asked);

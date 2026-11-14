@@ -132,7 +132,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   try {
     const tR = Date.now();
     await setState(ctx, u.callId, wakes.length ? "searching" : "thinking", wakes.length ? "searching team memory" : "reading the conversation");
-    const query = batch.map((b) => b.text).join(" ").slice(-600);
+    const query = batch.map((b) => b.askedText ?? b.text).join(" ").slice(-600);
     // Previous calls, GitHub and Atlas stats only matter when someone is talking to Gomon; fetched alongside retrieval.
     [memories, workspace] = await Promise.all([
       memoryEnabled ? retrieve(ctx.c, ctx, query) : Promise.resolve([]),
@@ -144,7 +144,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     const tA = Date.now();
     a = await analyze(
       recentDesc.reverse().map((r) => ({ id: String(r._id), speaker: r.speaker.displayName, text: r.text })),
-      batch.map((b) => ({ id: String(b._id), speaker: b.speaker.displayName, text: b.text })),
+      // askedText: the whole request when the name came after it or it answers Gomon's own offer (main.ts).
+      batch.map((b) => ({ id: String(b._id), speaker: b.speaker.displayName, text: b.askedText ?? b.text })),
       open.map((i) => ({ id: String(i._id), kind: i.kind, text: i.text, status: i.status })),
       memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text, from: origins.get(String(m._id)) })),
       wakes.map((x) => ({ id: String(x.b._id), heardAs: x.w.heardAs ?? "" })),

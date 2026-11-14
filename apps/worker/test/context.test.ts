@@ -23,3 +23,29 @@ test("a closed issue is history: it keeps its state and is not presented as a cu
 test("a pull request reads as a PR", () => {
   assert.match(issueLine({ ...base, number: 14, pull_request: {} }).line, /^PR #14 \[open\]/);
 });
+
+import { ticketSummary, type GhIssue, type Names } from "../src/context.ts";
+
+const NAMES: Names = new Map([["naidx0", "Max Naidenov"], ["roppax", "Robert Reder"], ["wagerwarrior", "Tamir Azbel"]]);
+const iss = (number: number, title: string, logins: string[] = [], state = "open"): GhIssue => ({ number, title, state, created_at: "2026-11-14T00:00:00Z", assignees: logins.map((login) => ({ login })) });
+
+test("open tickets are sorted by whether someone has them, with names instead of logins", () => {
+  const s = ticketSummary([iss(26, "C-02: postmortems", ["naidx0"]), iss(25, "D-09: no sync writes", ["Roppax"]), iss(24, "D-17: global cluster"), iss(23, "[P2] adapter"), iss(9, "old", [], "closed")], NAMES);
+  assert.match(s, /^OPEN TICKETS: 4 open GitHub issues\.$/m);
+  assert.match(s, /^WITH NOBODY ASSIGNED \(2\): #24 D-17: global cluster; #23 \[P2\] adapter\.$/m);
+  assert.match(s, /^ASSIGNED \(2\): #26 C-02: postmortems -> Max Naidenov; #25 D-09: no sync writes -> Robert Reder\.$/m);
+  assert.match(s, /only Max Naidenov, Robert Reder, Tamir Azbel\./);
+});
+
+test("a ticket never appears in both lists, and closed ones and pull requests are in neither", () => {
+  const all = [iss(1, "a", ["naidx0"]), iss(2, "b"), iss(3, "c", [], "closed"), { ...iss(4, "d"), pull_request: {} }];
+  const s = ticketSummary(all, NAMES);
+  const free = /WITH NOBODY ASSIGNED \(\d+\): (.*)\.$/m.exec(s)![1], taken = /^ASSIGNED \(\d+\): (.*)\.$/m.exec(s)![1];
+  assert.equal(free, "#2 b");
+  assert.equal(taken, "#1 a -> Max Naidenov");
+});
+
+test("an issue line gives the assignee's name when the login is known", () => {
+  assert.match(issueLine({ ...base, assignees: [{ login: "Roppax" }] }, NAMES).line, /assigned to Robert Reder\)$/);
+  assert.match(issueLine({ ...base, assignees: [{ login: "stranger" }] }, NAMES).line, /assigned to stranger\)$/);
+});

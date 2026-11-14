@@ -40,3 +40,44 @@ test("nothing follows: the fragment is released once the room is quiet", () => {
   assert.equal(releaseHeld("c5", "Hey, Gomon.", 3000, 4500), "released");
   assert.equal(releaseHeld("c5", "Hey, Gomon.", 3000, 5000), "gone");
 });
+
+import { nameOnly, offeredAction, trailingAsk } from "../src/hold.ts";
+
+test("name only: the name with greetings or filler, nothing to answer", () => {
+  for (const t of ["Hey, Gomon.", "Gomon.", "Yes. Hey, Gomon.", "Awesome. Hey, Gomon."]) assert.equal(nameOnly(t), true, t);
+  for (const t of ["Hey Gomon, what did we decide?", "Um, Max. Hey, Gomon.", "Tell me who can I assign it to? Hey, Gomon.", "What about the tickets?"]) assert.equal(nameOnly(t), false, t);
+});
+
+const NOW = 1_000_000;
+test("the name after the request: what the same person just said is the ask", () => {
+  // Live Nov 14: "…turn it into a GitHub issue…" / "…are you able to assign it to anybody?" / "Hey, Gomon."
+  const prior = [
+    { speaker: "Max", text: "Are you able to actually assign it to anybody?", at: NOW - 1000 },
+    { speaker: "Max", text: "Take the ticket C02 and turn it into a GitHub issue.", at: NOW - 7000 },
+  ];
+  assert.deepEqual(trailingAsk(prior, "Max", 0, NOW), { ask: "Take the ticket C02 and turn it into a GitHub issue. Are you able to actually assign it to anybody?", duplicate: false });
+});
+
+test("a second name right after a line that already had the name is a duplicate, not a new ask", () => {
+  // Live Nov 14: "…who can I assign it to? Hey, Gomon." then "Hey, Gomon." four seconds later: Gomon answered twice.
+  const prior = [{ speaker: "Max", text: "Tell me, who can I assign it to? Hey, Gomon.", at: NOW - 4000 }];
+  assert.deepEqual(trailingAsk(prior, "Max", 0, NOW), { ask: "", duplicate: true });
+  assert.equal(trailingAsk([{ ...prior[0], at: NOW - 20_000 }], "Max", 0, NOW).duplicate, false, "an old addressed line is not a duplicate");
+});
+
+test("lines Gomon already answered, other people's lines and old lines are not the ask", () => {
+  const line = { speaker: "Max", text: "Which tickets have nobody on them right now?", at: NOW - 5000 };
+  assert.equal(trailingAsk([line], "Max", NOW - 2000, NOW).ask, "", "said before Gomon's last answer");
+  assert.equal(trailingAsk([{ ...line, speaker: "Robert" }], "Max", 0, NOW).ask, "", "someone else said it");
+  assert.equal(trailingAsk([{ ...line, at: NOW - 40_000 }], "Max", 0, NOW).ask, "", "too long ago");
+  assert.equal(trailingAsk([{ ...line, text: "Yeah." }], "Max", 0, NOW).ask, "", "too short to be a request");
+  assert.equal(trailingAsk([], "Max", 0, NOW).ask, "");
+});
+
+test("an offer to act is recognised, a plain answer is not", () => {
+  assert.equal(offeredAction("Yes, I'm here. Want me to assign issue 24 to someone?"), true);
+  assert.equal(offeredAction("Who should I assign issue 24 to?"), true);
+  assert.equal(offeredAction("Want me to file it?"), true);
+  assert.equal(offeredAction("D-17 says one global Atlas cluster. Issue 24 is unassigned."), false);
+  assert.equal(offeredAction("Did you mean D-02?"), false);
+});

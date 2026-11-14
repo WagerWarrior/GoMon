@@ -16,7 +16,8 @@
     "join": "node --env-file=../../.env --import tsx scripts/join.ts",
     "latency": "node --env-file=../../.env --import tsx scripts/latency.ts",
     "ask": "node --env-file=../../.env --import tsx scripts/ask.ts",
-    "participants": "node --env-file=../../.env --import tsx scripts/participants.ts"
+    "participants": "node --env-file=../../.env --import tsx scripts/participants.ts",
+    "seed:fraud": "node --env-file=../../.env --import tsx scripts/seed-fraud.ts"
   },
   "dependencies": {
     "langsmith": "^0.12.0",

@@ -56,3 +56,42 @@ export function releaseHeld(callId: string, text: string, quietMs: number, now =
   held.delete(callId);
   return "released";
 }
+
+/** Only the name was said ("Hey, Gomon.", "Okay, Gomon"): nothing before it and nothing after it worth answering. */
+export function nameOnly(text: string): boolean {
+  const w = parseWake(text);
+  if (!w.addressed) return false;
+  const filler = /^(hey|hi|hello|ok|okay|um+|uh+|so|yes|yeah|yep|and|well|right|awesome|cool|please|thanks|thank|you)$/;
+  const words = text.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+  const nameWords = (w.heardAs ?? "gomon").toLowerCase().split(/\s+/).length;
+  return words.filter((x) => !filler.test(x)).length <= nameWords;
+}
+
+export type PriorLine = { speaker: string; text: string; at: number };
+/** How far back a request can be when the name comes after it. */
+export const TRAIL_MS = 25_000;
+const DUPLICATE_NAME_MS = 8000;
+
+/**
+ * The name came on its own (Max, Nov 14, live: "…who can I assign it to?" then "Hey, Gomon." as a separate line). Two cases:
+ *  - `duplicate`: the line just before already had the name and is being answered. The second name is the same call for
+ *    attention; answering it again made Gomon talk twice.
+ *  - `ask`: what the same person said just before, since Gomon last spoke, is the request the name belongs to.
+ * `prior` is newest first. Pure.
+ */
+export function trailingAsk(prior: PriorLine[], speaker: string, lastSayAt: number, now = Date.now()): { ask: string; duplicate: boolean } {
+  const newest = prior[0];
+  if (newest && now - newest.at <= DUPLICATE_NAME_MS && parseWake(newest.text).addressed) return { ask: "", duplicate: true };
+  const lines: string[] = [];
+  for (const p of prior) {
+    if (lines.length >= 3 || p.speaker !== speaker || p.at <= lastSayAt || now - p.at > TRAIL_MS || parseWake(p.text).addressed) break;
+    lines.unshift(p.text.trim());
+  }
+  const ask = lines.join(" ");
+  return { ask: ask.split(/\s+/).filter(Boolean).length >= 3 ? ask : "", duplicate: false };
+}
+
+/** Gomon's last line offered to do something ("Want me to assign issue 24 to someone?"): the reply to it is an action request. */
+export function offeredAction(lastSay: string): boolean {
+  return /\b(assign|file|create|lock|close|post|open|turn)\b[^.?!]*\?\s*$/i.test(lastSay.trim());
+}
