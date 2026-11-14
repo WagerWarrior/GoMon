@@ -11,6 +11,7 @@
     "say": "node --env-file=../../.env --import tsx scripts/utter.ts",
     "verify": "node --env-file=../../.env --import tsx scripts/verify.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
     "inspect": "node --env-file=../../.env --import tsx scripts/inspect.ts",
     "join": "node --env-file=../../.env --import tsx scripts/join.ts"
   },

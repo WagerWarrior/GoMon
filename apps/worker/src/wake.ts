@@ -38,14 +38,27 @@ function soundsLikeWake(c: string, greeted: boolean): boolean {
 
 export type Wake = { addressed: boolean; rest: string; heardAs: string | null };
 
+/**
+ * Scribe and Recall commit whole sentences ("Chill for a sec. Hey, hey, Gomon. Can you…"), so the wake word is looked for
+ * at the start of the segment, at every sentence start, and right after any greeting, not only in the first two words.
+ * The request is everything after the wake word, across sentences.
+ */
 export function parseWake(text: string): Wake {
-  const words = text.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").trim().split(/\s+/).filter(Boolean);
-  const greeted = GREETINGS[words[0] ?? ""] === true;
-  const from = greeted ? 1 : 0;
-  for (const n of [1, 2]) {
-    const heard = words.slice(from, from + n);
-    if (heard.length === n && soundsLikeWake(heard.join(""), greeted)) {
-      return { addressed: true, rest: words.slice(from + n).join(" "), heardAs: heard.join(" ") };
+  const words: string[] = []; const starts = new Set<number>([0]);
+  for (const sentence of text.toLowerCase().split(/[.!?]+/)) {
+    const ws = sentence.replace(/[^a-z0-9' ]+/g, " ").trim().split(/\s+/).filter(Boolean);
+    if (ws.length) { starts.add(words.length); words.push(...ws); }
+  }
+  for (let i = 0; i < words.length; i++) {
+    const afterGreeting = i > 0 && GREETINGS[words[i - 1]] === true;
+    if (!starts.has(i) && !afterGreeting) continue;
+    let from = i; while (GREETINGS[words[from] ?? ""]) from++; // "hey, hey, Gomon"
+    const greeted = afterGreeting || from > i;
+    for (const n of [1, 2]) {
+      const heard = words.slice(from, from + n);
+      if (heard.length === n && soundsLikeWake(heard.join(""), greeted)) {
+        return { addressed: true, rest: words.slice(from + n).join(" "), heardAs: heard.join(" ") };
+      }
     }
   }
   return { addressed: false, rest: text, heardAs: null };
