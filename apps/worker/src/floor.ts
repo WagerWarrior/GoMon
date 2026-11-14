@@ -46,9 +46,11 @@ export type BargeIn = "stop_word" | "talk_over" | null;
  *   ms             how long this person has been talking in this turn (0 when unknown: a committed sentence)
  *   speakingForMs  how long Gomon's clip has been playing
  * Only talk that overlaps Gomon's voice counts. Before this the whole turn counted, so the asker finishing their own question
- * cut the answer after a second, and that is why talk-over was switched off for a while. BARGE_TALK_OVER=off leaves only "stop".
+ * cut the answer after a second, and that is why talk-over was switched off for a while.
+ * Talk-over is off unless BARGE_TALK_OVER=on (Nov 14, demo call-202611142346-9d3f): every talk-over cut that day was someone
+ * narrating to the room, never a real stop, and both first answers of the demo were lost. "Stop" and the name still cut it.
  */
-export function bargeIn(heard: string, speaking: string | null, ms = 0, speakingForMs = Infinity, talkOver = process.env.BARGE_TALK_OVER !== "off"): BargeIn {
+export function bargeIn(heard: string, speaking: string | null, ms = 0, speakingForMs = Infinity, talkOver = process.env.BARGE_TALK_OVER === "on"): BargeIn {
   if (speaking === null) return null;
   const h = words(heard);
   if (!h.length) return null;
@@ -65,4 +67,12 @@ export function bargeIn(heard: string, speaking: string | null, ms = 0, speaking
   }
   // A committed sentence of unknown length: five words, once the clip has played long enough that they were said over it.
   return h.length >= BARGE_WORDS && over >= 1500 ? "talk_over" : null;
+}
+
+/** The Meet chat line for an answer that was cut off, so nothing Gomon found is lost (Meet's limit: 500 characters). Pure. */
+export function cutNote(text: string): string {
+  const head = 'Gomon was cut off. It was saying: "';
+  const room = 500 - head.length - 2;
+  const t = text.trim();
+  return `${head}${t.length > room ? `${t.slice(0, room - 1).trimEnd()}…` : t}"`;
 }

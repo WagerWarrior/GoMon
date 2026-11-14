@@ -10,6 +10,9 @@ import type { ChangeStreamInsertDocument } from "mongodb";
 import type { Cols } from "./db.ts";
 import type { Say } from "./shapes.ts";
 import { showCard } from "./card.ts";
+import { postToMeetingChat } from "./links.ts";
+import { cutNote } from "./floor.ts";
+import type { Ctx } from "./governance.ts";
 
 const env = {
   elKey: () => process.env.ELEVENLABS_API_KEY ?? "",
@@ -135,6 +138,8 @@ export async function stopSpeaking(c: Cols, callId: string, why: string, heardTe
     c.calls.updateOne({ _id: callId as never }, { $set: { agentState: { state: "listening", detail: why === "wake_word" ? "stopped: new question" : "stopped: someone took the floor", at: now } } }),
   ]);
   void showCard(c, callId, "listening", { force: true });
+  // Stopped by "stop" or by talk-over: the answer still lands in the chat. A new question (wake word) replaces it; a meeting that ended has no chat.
+  if (why === "stop_word" || why === "talk_over") void postToMeetingChat({ c, teamId: cur.say.teamId, projectId: cur.say.projectId } as Ctx, callId, cutNote(cur.say.text)).catch((e) => console.error("[voice] cut note:", e instanceof Error ? e.message : e));
   return true;
 }
 
