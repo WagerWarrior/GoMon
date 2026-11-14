@@ -26,6 +26,15 @@ Verified: worker typecheck 0, `npm test` 15/15 (new `test/floor.test.ts`, `test/
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 
+## For Rob: Gomon's camera card is animated now (2026-11-14, 16:35)
+`apps/worker/src/card.ts` draws each frame (SVG -> JPEG with `sharp`) in the dashboard theme and pushes it through the same
+Recall Output Video call. Callers are unchanged (`showCard`). Thinking: three moving dots, a live timer and the `agentState.detail`
+line. Speaking: voice bars. Locking: a ring that drains over the 10 s veto with the seconds left. Listening: one still frame.
+- **To pick it up:** `git pull && cd apps/worker && npm i` (new dependency `sharp`), restart the worker. Without `npm i` it logs a
+  warning and shows the still cards, nothing breaks.
+- Frames go out every 0.6 to 1 s only while a state lasts; a 429 pauses the animation 3 s. Tests: `npm test` (22/22).
+- **Not verified in a live Meet.** Unknown: how fast Recall swaps the image, and its rate limit on `output_video`.
+
 ## For Tamir (and his agents): barge-in decision needed (2026-11-14)
 Gomon talks over people in Meet: the bot only hears finished sentences, and `cancel` never stops the current line.
 Plan with research and four slices: `docs/listening-behaviour-plan.md`. Slice 1 is built as **draft PR #14**
