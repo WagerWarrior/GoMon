@@ -6,7 +6,7 @@
 export type Cite = { id: string; key?: string; text: string };
 export type Answer = { text: string; by: "llm" | "retrieval"; model?: string; note?: string };
 
-export const DEFAULT_MODEL = "claude-sonnet-5-5";
+export const DEFAULT_MODEL = "claude-haiku-5-5"; // same as apps/worker ANALYZE_MODEL; spoken answers need speed
 
 export function retrievalAnswer(memory: boolean, cited: Cite[]): Answer {
   if (!memory) return { text: "Memory is off: answering without team context, so no stored decision is checked or cited.", by: "retrieval" };
