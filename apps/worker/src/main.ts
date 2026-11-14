@@ -21,7 +21,7 @@ import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
 import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
 import { parseWake } from "./wake.ts";
 import { login, logout, userFromToken, userIdForDisplayName, visibleCallsFilter, type PublicUser } from "./auth.ts";
-import { heard, startRecallVoice } from "./voice.ts";
+import { heard, startRecallVoice, stopSpeaking } from "./voice.ts";
 import { createBot, leaveBot } from "./recall.ts";
 import { createProjectWithBoard } from "./projects.ts";
 import { COMPANY_PROJECT } from "./scope.ts";
@@ -297,6 +297,33 @@ async function startMeeting(b: Record<string, unknown>, me: PublicUser | null): 
   return { status: 201, data: { callId, botId, projectId } };
 }
 
+/** Ending a call: Gomon stops mid-sentence and nothing it had queued is spoken. */
+async function silence(callId: string): Promise<void> {
+  await stopSpeaking(c, callId, "meeting_ended");
+  await c.says.updateMany({ callId, status: { $in: ["queued", "started"] } }, { $set: { status: "cancelled", cancelledBy: "meeting_ended", updatedAt: new Date() } });
+}
+
+/**
+ * Any dashboard can end a call by writing `status: "ended"` with `endRequested: true` (web POST /api/sessions/:id/end). This
+ * worker holds the voice and the Recall key, so it stops talking and takes the bot out, whichever machine the click came from.
+ */
+function watchEndRequests(): void {
+  const cs = c.calls.watch([{ $match: { operationType: "update", "updateDescription.updatedFields.endRequested": true } }], { fullDocument: "updateLookup" });
+  cs.on("change", (ev) => {
+    if (ev.operationType !== "update" || !ev.fullDocument) return;
+    const call = ev.fullDocument;
+    const callId = String(call._id);
+    void (async () => {
+      await silence(callId);
+      let recallError: string | undefined;
+      if (typeof call.botId === "string") { try { await leaveBot(call.botId); } catch (e) { recallError = errText(e); } }
+      await c.calls.updateOne({ _id: callId as never }, { $unset: { endRequested: "" }, $set: { botLeftAt: new Date(), ...(recallError ? { botLeaveError: recallError } : {}) } });
+      console.log(`[end] ${callId} ended from a dashboard${recallError ? ` (Recall: ${recallError})` : ""}`);
+    })().catch((e) => console.error("[end]", e));
+  });
+  cs.on("error", (e) => console.warn("[end] stream error:", e.message));
+}
+
 /** Take Gomon out of the meeting and end the call. The call ends even if Recall reports the bot already gone. */
 async function leaveMeeting(callId: string, b: Record<string, unknown>, me: PublicUser | null): Promise<Reply> {
   const call = await c.calls.findOne({ _id: callId as never, teamId: config.teamId });
@@ -304,6 +331,7 @@ async function leaveMeeting(callId: string, b: Record<string, unknown>, me: Publ
   const actor = (await requester(me, b)) ?? "workspace";
   const botId = typeof call.botId === "string" ? call.botId : undefined;
   let recallError: string | undefined;
+  await silence(callId);
   if (botId) {
     try { await leaveBot(botId); } catch (e) { recallError = errText(e); }
   }
@@ -490,5 +518,6 @@ server.listen(config.port, () => console.log(`[http] gomon worker on :${config.p
 if (process.env.VOICE_OUT === "recall") startRecallVoice(c, console.log);
 setInterval(() => { sweepAllLocks().catch((e) => console.error("[locks]", e)); }, 1000);
 setInterval(() => { catchUp().catch((e) => console.error("[catchup]", e)); }, 15_000);
+watchEndRequests();
 await catchUp();
 await watchUtterances();

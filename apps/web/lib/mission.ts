@@ -117,3 +117,30 @@ export async function command(input: { callId?: string; mode?: string; text?: st
   await d.collection("audit_events").insertOne({ teamId, projectId, callId, at: now, type: "operator_prompt", actor: "Mission control", reason: body });
   return { status: 201, data: { ok: true, utteranceId: String(r.insertedId) } };
 }
+
+/**
+ * End a meeting from any dashboard, at once (Max, Nov 14). Three things, none waiting on another machine being up:
+ *   1. Atlas: the call is ended now and `endRequested` is set; the worker (which holds the voice) watches for it, stops
+ *      talking and takes the bot out. Lines Gomon had queued are cancelled here.
+ *   2. Recall: if this machine has RECALL_API_KEY, the bot is told to leave directly, without the worker.
+ *   3. Audit row with who ended it and what happened to the bot.
+ */
+export async function endMeeting(input: { callId?: string; actor?: string }) {
+  const callId = String(input.callId ?? "").trim();
+  if (!callId) return { status: 400, data: { error: "callId is required" } };
+  const d = await db(); const { teamId } = scope(); const now = new Date();
+  const call = await d.collection("calls").findOneAndUpdate({ _id: callId as any, teamId }, { $set: { status: "ended", endedAt: now, endRequested: true } }, { returnDocument: "before" });
+  if (!call) return { status: 404, data: { error: "unknown call" } };
+  await d.collection("says").updateMany({ callId, status: "queued" }, { $set: { status: "cancelled", cancelledBy: "meeting_ended", updatedAt: now } });
+  const botId = typeof call.botId === "string" ? call.botId : null;
+  let bot = botId ? "worker asked to take Gomon out" : "no bot in this call";
+  const key = process.env.RECALL_API_KEY;
+  if (botId && key) {
+    const r = await fetch(`https://${process.env.RECALL_REGION || "us-west-2"}.recall.ai/api/v1/bot/${encodeURIComponent(botId)}/leave_call/`, {
+      method: "POST", headers: { authorization: `Token ${key}`, accept: "application/json" }, signal: AbortSignal.timeout(4000),
+    }).catch((e: unknown) => ({ ok: false, status: String(e instanceof Error ? e.message : e) }));
+    bot = r.ok ? "Gomon left the meeting" : `Recall said ${r.status}; worker asked to take Gomon out`;
+  }
+  await d.collection("audit_events").insertOne({ teamId, projectId: typeof call.projectId === "string" ? call.projectId : scope().projectId, callId, at: now, type: "meeting_ended", actor: String(input.actor ?? "").trim() || "Mission control", reason: bot, ref: { botId, from: "dashboard" } });
+  return { status: 200, data: { ok: true, callId, bot, wasLive: call.status === "live" } };
+}

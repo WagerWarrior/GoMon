@@ -822,6 +822,12 @@
 @media(max-width:1100px){.en-pipe{grid-template-columns:repeat(3,minmax(0,1fr))}.en-pipe li:nth-child(3)::before{display:none}}
 @media(max-width:640px){.en-pipe{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+/* End meeting (components/platform/EndMeeting.tsx): hairline pill, red square */
+.em{display:inline-flex;align-items:center;gap:8px;min-width:0;font-size:12px}
+.em-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;color:#0a0a0a;border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap}
+.em-btn i{width:7px;height:7px;border-radius:2px;background:#cf222e}
+.em-btn:hover{border-color:#cf222e}.em-btn:disabled{opacity:.6;cursor:default}
+.em-note{font-style:normal;color:#5b5f5c;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* In-app listener (components/platform/Listen.tsx) */
 /* One hairline pill that never leaves the header: button, then who is who (or the two level dots), then the last line heard. */
 .ls{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:3px 12px 3px 3px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:12px;color:#5b5f5c;overflow:hidden}
