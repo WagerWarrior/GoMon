@@ -1,6 +1,6 @@
-import MissionControl from "@/components/platform/MissionControl";
-import { mission } from "@/lib/mission";
-export const dynamic = "force-dynamic";
+import { redirect } from "next/navigation";
+/** Mission control is the home page now; a single call's live view is under its session. */
 export default async function MissionPage({ searchParams }: { searchParams: Promise<{ callId?: string }> }) {
-  return <MissionControl initial={await mission((await searchParams).callId)} />;
+  const id = (await searchParams).callId;
+  redirect(id ? `/sessions/${encodeURIComponent(id)}?tab=live` : "/");
 }

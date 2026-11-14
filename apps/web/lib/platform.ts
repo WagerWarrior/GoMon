@@ -237,3 +237,41 @@ async function loadDatabase() {
   }));
   return { db: dbName(), rows };
 }
+
+/** One collection, inspected: inferred schema over the latest 200 docs, indexes, latest rows. */
+export function collection(name: string) {
+  return cached(`coll:${name}`, 5000, async () => {
+    const d = await db(); const c = d.collection(name);
+    const [count, docs, indexes] = await Promise.all([c.estimatedDocumentCount(), c.find({}, { projection: { embedding: 0, token: 0 } }).sort({ _id: -1 }).limit(200).toArray(), c.indexes().catch(() => [])]);
+    let search: string[] = [];
+    try { search = (await c.listSearchIndexes().toArray()).map((i: any) => `${i.name} (${i.type ?? "search"})`); } catch {}
+    const fields = new Map<string, { n: number; types: Set<string> }>();
+    const typeOf = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "array" : v instanceof Date ? "date" : typeof v === "object" && (v as any)._bsontype === "ObjectId" ? "objectId" : typeof v);
+    for (const doc of docs) for (const [k, v] of Object.entries(doc)) { const f = fields.get(k) ?? fields.set(k, { n: 0, types: new Set() }).get(k)!; f.n++; f.types.add(typeOf(v)); }
+    return plain<any>({
+      name, count, indexes: indexes.map((i: any) => ({ name: i.name, key: i.key, unique: !!i.unique, ttl: i.expireAfterSeconds ?? null })), search,
+      fields: [...fields.entries()].map(([k, f]) => ({ name: k, presence: Math.round((f.n / Math.max(1, docs.length)) * 100), types: [...f.types] })),
+      docs: docs.slice(0, 25),
+    });
+  });
+}
+
+/** Setup checklist for Models & voice: which env keys each service needs and whether each is set (never the value). */
+export function setup() {
+  const has = (k: string) => !!process.env[k];
+  const svc = (name: string, role: string, does: string, keys: string[], value: string) => ({ name, role, does, value, keys: keys.map((k) => ({ k, set: has(k) })), ready: keys.filter((k) => !/MODEL|REGION|VARIANT|VOICE_ID|PROJECT|FORMAT/.test(k)).every(has) });
+  return [
+    svc("MongoDB Atlas", "Memory and data", "Stores every call, memory and action. Vector search finds relevant memory.", ["MONGODB_URI", "MONGODB_DB"], process.env.MONGODB_DB || "gomon"),
+    svc("Reasoning model", "Thinks", "Reads each turn with recalled memory and decides what to capture or say.", ["LLM_API_KEY", "ANALYZE_MODEL"], process.env.ANALYZE_MODEL || "claude-haiku-5-5"),
+    svc("Embeddings", "Searches", "Turns memory into vectors for search inside Atlas.", ["VOYAGE_API_KEY", "VOYAGE_MODEL"], process.env.VOYAGE_MODEL || "voyage-4"),
+    svc("Meeting bot", "Hears", "Joins the meeting and streams what people say.", ["RECALL_API_KEY", "RECALL_REGION", "RECALL_BOT_VARIANT"], `Recall.ai ${process.env.RECALL_REGION || "us-west-2"}`),
+    svc("Voice", "Speaks", "Turns Gomon's lines into speech in the call.", ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "ELEVENLABS_MODEL_ID"], process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5"),
+    svc("Slack", "Sends", "Posts locked decisions into the call's thread.", ["SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"], process.env.SLACK_CHANNEL_ID ? "channel set" : "no channel"),
+    svc("GitHub", "Sends", "Opens an issue for each locked decision.", ["GITHUB_TOKEN", "GITHUB_REPO"], process.env.GITHUB_REPO || "no repo"),
+    svc("Tracing", "Observes", "Sends agent traces to LangSmith.", ["LANGSMITH_API_KEY", "LANGSMITH_PROJECT"], process.env.LANGSMITH_PROJECT || "default"),
+  ];
+}
+export async function atlasPing() {
+  const t = Date.now();
+  try { await (await db()).command({ ping: 1 }); return { ok: true, ms: Date.now() - t }; } catch { return { ok: false, ms: Date.now() - t }; }
+}
