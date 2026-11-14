@@ -1,5 +1,6 @@
 import { db, scope } from "@/lib/db";
 import { embedMissing, retrieve } from "@/lib/retrieval";
+import { answer } from "@/lib/answer";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -19,13 +20,12 @@ export async function POST(req: Request) {
   } catch (e: any) {
     return Response.json({ error: `retrieval failed: ${e?.message ?? e}` }, { status: 502 });
   }
-  const answer = memory
-    ? hits.length ? `From team memory: ${hits[0].text}` : "Team memory has nothing on this yet."
-    : "Memory is off: answering without team context, so no stored decision is checked or cited.";
+  const cited = hits.map((h) => ({ id: String(h._id), key: h.key, text: h.text }));
+  const a = await answer(question.trim(), !!memory, cited);
   const ms = Date.now() - started;
   await d.collection("audit_events").insertOne({
     callId, ...sc, at: new Date(), type: memory ? "ask_memory_on" : "ask_memory_off", actor: actor || "workspace",
-    reason: question.trim().slice(0, 200), ref: { memoryIds: hits.map((h) => String(h._id)), ms },
+    reason: question.trim().slice(0, 200), ref: { memoryIds: cited.map((c) => c.id), ms, answeredBy: a.by, model: a.model, note: a.note },
   });
-  return Response.json({ answer, memory: !!memory, ms, cited: hits.map((h) => ({ id: String(h._id), key: h.key, kind: h.kind, version: h.version, text: h.text, score: Number(h.score.toFixed(3)) })) });
+  return Response.json({ answer: a.text, answeredBy: a.by, model: a.model, note: a.note, memory: !!memory, ms, cited: hits.map((h) => ({ id: String(h._id), key: h.key, kind: h.kind, version: h.version, text: h.text, score: Number(h.score.toFixed(3)) })) });
 }

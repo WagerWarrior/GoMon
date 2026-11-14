@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 type Cited = { id: string; key?: string; kind?: string; version?: number; text: string; score: number };
-type Result = { answer: string; ms: number; cited: Cited[] } | { error: string };
+type Result = { answer: string; ms: number; cited: Cited[]; answeredBy?: "llm" | "retrieval"; model?: string; note?: string } | { error: string };
 
 const SAMPLE = "Proposal: flat 100 requests per second per tenant for everyone, including enterprise";
 
@@ -44,8 +44,9 @@ function Side({ title, r }: { title: string; r: Result | null }) {
   if ("error" in r) return <div className="ask-side"><h3>{title}</h3><p className="badtxt">{r.error}</p></div>;
   return (
     <div className="ask-side">
-      <h3>{title} <span className="muted small">{r.ms} ms · {r.cited.length} cited</span></h3>
+      <h3>{title} <span className="muted small">{r.ms} ms · {r.cited.length} cited · {r.answeredBy === "llm" ? r.model : "retrieval only"}</span></h3>
       <p>{r.answer}</p>
+      {r.note && <p className="muted small">{r.note}</p>}
       {r.cited.length > 0 && (
         <ul className="plain">
           {r.cited.map((c) => (
