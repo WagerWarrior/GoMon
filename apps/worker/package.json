@@ -17,7 +17,8 @@
     "latency": "node --env-file=../../.env --import tsx scripts/latency.ts",
     "ask": "node --env-file=../../.env --import tsx scripts/ask.ts",
     "participants": "node --env-file=../../.env --import tsx scripts/participants.ts",
-    "seed:fraud": "node --env-file=../../.env --import tsx scripts/seed-fraud.ts"
+    "seed:fraud": "node --env-file=../../.env --import tsx scripts/seed-fraud.ts",
+    "reset:demo": "node --env-file=../../.env --import tsx scripts/reset-demo.ts"
   },
   "dependencies": {
     "langsmith": "^0.12.0",

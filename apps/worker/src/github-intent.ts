@@ -40,6 +40,11 @@ const KEY = /^([a-z])[\s-]?(\d{1,3})$/i;
 const ISSUE_ID = /#(\d+)(?::|$)/;
 const ISSUE_TYPES = { $or: [{ type: "create_issue" }, { type: "github", "payload.op": "create_issue" }] };
 
+/** The issue filed for a memory, if any. Failed or denied filings never count; one a demo reset reverted no longer does. Pure. */
+export function filedIssueQuery(teamId: string, memoryId: ObjectId): Record<string, unknown> {
+  return { teamId, memoryId, ...ISSUE_TYPES, status: { $nin: ["failed", "denied"] }, reverted: { $ne: true } };
+}
+
 type IssueRef = { n: number } | { say: string };
 
 /** Spoken ref -> issue number: digits/words, a memory key we filed an issue for, or "" = the latest issue touched on this call. */
@@ -55,7 +60,7 @@ async function resolveIssue(ctx: Ctx, callId: string, ref: string): Promise<Issu
     const key = `${k[1].toUpperCase()}-${k[2].padStart(2, "0")}`;
     const mem = await ctx.c.memories.findOne({ ...memoryFilter(ctx), key }, { projection: { _id: 1 } });
     if (!mem) return { say: `I don't see ${key} in team memory.` };
-    const filed = await ctx.c.actions.find({ teamId: ctx.teamId, memoryId: mem._id, ...ISSUE_TYPES, status: { $nin: ["failed", "denied"] } }).sort({ _id: -1 }).limit(1).next();
+    const filed = await ctx.c.actions.find(filedIssueQuery(ctx.teamId, mem._id)).sort({ _id: -1 }).limit(1).next();
     const m = filed?.externalId && ISSUE_ID.exec(String(filed.externalId));
     if (m) return { n: Number(m[1]) };
     return { say: filed ? `${key}'s issue is still being filed, try again in a moment.` : `${key} doesn't have an issue yet. Want me to file one?` };
@@ -140,7 +145,7 @@ export async function handleGithubIntent(
     const mem = ref ? await ctx.c.memories.findOne({ _id: ref._id }) as (Memory & { _id: ObjectId }) | null : null;
     if (mem) {
       // Already filed (by voice, a click or a workflow): apply the asked-for changes to that issue instead of a duplicate.
-      const filed = await ctx.c.actions.find({ teamId: ctx.teamId, memoryId: mem._id, ...ISSUE_TYPES, status: { $nin: ["failed", "denied"] } }).sort({ _id: -1 }).limit(1).next();
+      const filed = await ctx.c.actions.find(filedIssueQuery(ctx.teamId, mem._id)).sort({ _id: -1 }).limit(1).next();
       if (filed) {
         const m = filed.externalId && ISSUE_ID.exec(String(filed.externalId));
         if (!m) return `${mem.key ?? "That"} is already being filed.${dontKnow(add.unknown)}`;

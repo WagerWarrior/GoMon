@@ -78,10 +78,22 @@ if (!token) console.log("GITHUB_TOKEN is not set: no issues created");
 else {
   const gh = (path: string, init: RequestInit = {}) => fetch(`https://api.github.com/repos/${repo}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" } });
   const existing = (await (await gh("/issues?state=all&per_page=100")).json()) as { number: number; title: string }[];
+  // Each seeded issue is also recorded as a filing of its memory (an `actions` row), the way a live filing is. Without it the
+  // "already filed?" check found nothing, so "Hey Gomon, file T-05" would have opened a second issue next to #29.
+  const record = async (l: Lock, n: number) => {
+    const mem = await c.memories.findOne({ teamId: T, key: l.key, status: "active" }, { projection: { _id: 1 } });
+    if (!mem) return;
+    await c.actions.updateOne({ idempotencyKey: `seed-fraud:${l.key}` }, { $setOnInsert: {
+      type: "github", teamId: T, projectId: P, payload: { op: "create_issue", title: `${l.key}: seeded issue #${n}` }, requestedBy: "seed-fraud",
+      idempotencyKey: `seed-fraud:${l.key}`, status: "confirmed", attempts: 1, createdAt: new Date(), announce: false,
+      policyCheck: { allowed: true, reason: "demo issue created by scripts/seed-fraud.ts with the repo token", checkedAt: new Date() },
+      externalId: `${repo}#${n}`, externalUrl: `https://github.com/${repo}/issues/${n}`, memoryId: mem._id, ...syn,
+    } } as never, { upsert: true });
+  };
   for (const l of LOCKS.filter((x) => x.issue)) {
     const title = `${l.key}: ${l.text.length > 110 ? `${l.text.slice(0, 109)}…` : l.text}`;
     const had = existing.find((i) => i.title.startsWith(`${l.key}: `) && i.title.includes("FR-2291"));
-    if (had) { console.log(`issue #${had.number} already there for ${l.key}`); continue; }
+    if (had) { await record(l, had.number); console.log(`issue #${had.number} already there for ${l.key} (filing recorded)`); continue; }
     const res = await gh("/issues", { method: "POST", body: JSON.stringify({
       title, labels: ["gomon", l.kind],
       body: `${l.text}\n\nFrom the meeting "Meridian Bank fraud review" (November 11, 2026), locked as ${l.key} by ${l.by}. Client case FR-2291. Demo data (synthetic).`,
@@ -90,6 +102,7 @@ else {
     const made = (await res.json()) as { number?: number; message?: string };
     if (!res.ok || !made.number) { console.log(`issue for ${l.key} failed: ${res.status} ${made.message ?? ""}`); continue; }
     if (l.issue?.closed) await gh(`/issues/${made.number}`, { method: "PATCH", body: JSON.stringify({ state: "closed", state_reason: "completed" }) });
+    await record(l, made.number);
     console.log(`issue #${made.number} ${l.issue?.closed ? "(closed) " : ""}for ${l.key}${l.issue?.assignee ? `, assigned to ${l.issue.assignee}` : ", nobody assigned"}`);
   }
 }
