@@ -126,10 +126,13 @@ export default function Listen({ callId, defaultMe, defaultRemote }: { callId: s
     const ready = ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" })));
     runningRef.current = true; setRunning(true);
     try {
-      const tab = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false } });
       await ready;
-      if (tab.getAudioTracks().length) { tab.getVideoTracks().forEach((t) => { t.enabled = false; }); await startChannel("meeting", tab, ctx); }
-      else set("meeting", "no tab audio: pick the Meet tab, keep 'Also share tab audio' on", "err");
+      // Mic only by default (no computer-audio capture); ?tab=1 on the page URL also captures the Meet tab for remote voices.
+      if (new URLSearchParams(location.search).get("tab") === "1") {
+        const tab = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false } });
+        if (tab.getAudioTracks().length) { tab.getVideoTracks().forEach((t) => { t.enabled = false; }); await startChannel("meeting", tab, ctx); }
+        else set("meeting", "no tab audio: pick the Meet tab, keep 'Also share tab audio' on", "err");
+      }
       const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       await startChannel("mic", mic, ctx);
       if (ctx.state !== "running") await ctx.resume();
