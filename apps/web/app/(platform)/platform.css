@@ -282,3 +282,11 @@
 /* the main column never grows past the viewport (wide children used to stretch the page) */
 .p-main{grid-template-columns:minmax(0,1fr)}
 .mc,.mc-grid>*{min-width:0}
+.wf-chain{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.wf-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px}
+.wf-chip em{font-style:normal;color:#a3a6a3}
+.wf-chip.trig{background:var(--ink);color:#fff;border-color:var(--ink)}
+.wf-switch{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:3px 10px 3px 3px;background:#fff;font:500 12px var(--sans);cursor:pointer}
+.wf-switch i{width:28px;height:16px;border-radius:999px;background:#d9d7d1;position:relative;transition:background .15s}
+.wf-switch i::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform .15s}
+.wf-switch[aria-checked="true"] i{background:var(--leaf)}.wf-switch[aria-checked="true"] i::after{transform:translateX(12px)}

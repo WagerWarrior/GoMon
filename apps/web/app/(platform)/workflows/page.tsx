@@ -1,6 +1,7 @@
 import Link from "next/link";
 import AutoRefresh from "@/components/platform/AutoRefresh";
-import { workflowRuns, type Step } from "@/lib/workflows";
+import { storedWorkflows, workflowRuns, type Step } from "@/lib/workflows";
+import WorkflowToggle from "@/components/platform/WorkflowToggle";
 import { system } from "@/lib/platform";
 import { when } from "@/lib/format";
 export const dynamic = "force-dynamic";
@@ -15,15 +16,28 @@ const FLOW = [
 ];
 
 export default async function Workflows() {
-  const [{ runs, totals }, sys] = [await workflowRuns(), system()];
-  const ready = Object.fromEntries(sys.connectors.map((c) => [c.name, c.ready]));
+  const [{ runs, totals }, stored] = await Promise.all([workflowRuns(), storedWorkflows()]); const sys = system();
+  const ready: Record<string, boolean> = Object.fromEntries(sys.connectors.map((c) => [c.name, c.ready]));
+  // The connectors service holds the tokens, not this server: a confirmed send also proves the connector works.
+  ready.Slack ||= totals.slack > 0; ready["GitHub issues"] ||= totals.github > 0;
   return (
     <>
       <AutoRefresh />
       <header className="p-head"><div><h1>Workflows</h1><span className="eyebrow">Locked decision → Slack → GitHub</span></div></header>
 
+      {stored.map((w: any) => (
+        <section key={w._id} className="p-card wf-flow">
+          <div className="p-card-h"><h2>{w.name}</h2><div className="p-head-r"><span className="muted small">fired {w.fired}×{w.lastFired ? ` · last ${when(w.lastFired)}` : ""}</span><WorkflowToggle id={w._id} enabled={w.enabled} /></div></div>
+          <div className="wf-chain">
+            <span className="wf-chip trig">When {String(w.trigger).replace(/_/g, " ")}</span>
+            {w.steps.map((st: any, i: number) => <span key={i} className="wf-chip"><em>→</em>{st.type === "post_slack" ? "Post to Slack thread" : st.type === "create_issue" ? "Open GitHub issue" : st.type}</span>)}
+            <span className="wf-chip"><em>→</em>Policy check + read-back</span>
+          </div>
+        </section>
+      ))}
+
       <section className="p-card wf-flow">
-        <div className="p-card-h"><h2>Decision to ticket</h2><span className="pill good">Active</span></div>
+        <div className="p-card-h"><h2>How a decision becomes a ticket</h2></div>
         <ol>
           {FLOW.map((f, i) => (
             <li key={f.key}>

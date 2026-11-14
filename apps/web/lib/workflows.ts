@@ -51,3 +51,25 @@ export function workflowRuns() {
     return JSON.parse(JSON.stringify({ runs, totals: { runs: runs.length, slack: count("slack"), github: count("github"), confirmed: count("confirm") } }));
   });
 }
+
+/** Stored workflows (apps/connectors/src/workflows.ts) with fire counts. */
+export function storedWorkflows() {
+  return cached("stored-workflows", 2000, async () => {
+    const d = await db(); const { teamId, projectId } = scope();
+    const [wfs, runs] = await Promise.all([
+      d.collection("workflows").find({ teamId, projectId }).sort({ createdAt: 1 }).toArray(),
+      d.collection("workflow_runs").aggregate([{ $match: { teamId, projectId } }, { $group: { _id: "$workflowId", fired: { $sum: { $cond: [{ $eq: ["$status", "fired"] }, 1, 0] } }, last: { $max: "$firedAt" } } }]).toArray(),
+    ]);
+    const by = new Map(runs.map((r) => [String(r._id), r]));
+    return JSON.parse(JSON.stringify(wfs.map((w) => ({ ...w, fired: by.get(String(w._id))?.fired ?? 0, lastFired: by.get(String(w._id))?.last ?? null }))));
+  });
+}
+
+export async function setWorkflowEnabled(id: string, enabled: boolean, actor: string) {
+  const d = await db(); const { teamId, projectId } = scope();
+  if (!ObjectId.isValid(id)) return false;
+  const now = new Date();
+  const r = await d.collection("workflows").updateOne({ _id: new ObjectId(id), teamId, projectId }, { $set: { enabled, updatedAt: now, ...(enabled ? { enabledAt: now } : {}) } });
+  if (r.matchedCount) await d.collection("audit_events").insertOne({ teamId, projectId, at: now, type: enabled ? "workflow_enabled" : "workflow_disabled", actor, reason: id });
+  return r.matchedCount === 1;
+}
