@@ -22,7 +22,17 @@ Max ran the demo and Gomon answered without its name. Evidence (call-20261114205
    `agent_events.kind: "alias_learned"`. `/ears/token` now also returns `keyterms` (people, logins, projects) that both
    listeners pass to Scribe; a Scribe session with 8 keyterms started fine.
 5. **Live feed** (3fbcabc, `apps/web/lib/mission.ts`): shows the chime, fast-lane answers, interruptions and learned names.
-Verified: worker typecheck 0, `npm test` 15/15 (new `test/floor.test.ts`, `test/people.test.ts`), web typecheck 0. **Not verified live**: I did not
+6. **End meeting** (383dcb4): button on the session page -> `POST /api/sessions/:id/end` writes `status: "ended"` +
+   `endRequested: true`, cancels queued lines, audits. `main.ts` `watchEndRequests` (needs the restart) stops Gomon
+   mid-sentence and calls `leaveBot`, so the click works from any laptop. With RECALL_API_KEY in the web's env it also
+   tells Recall directly. Checked: unknown call 404; a real failed call ended from the button.
+7. **Context window** (adf7e14 `window.ts`, wired into `fast.ts`): named sections with token budgets (header 150, call so
+   far 250, open call items 300, team memory 500, workspace 700, past meetings 500, recent turns 700; ranked results keep
+   the head, turns keep the tail). New in the window: OPEN CALL ITEMS; the prompt now names PAST MEETINGS AND ADRS as an
+   allowed source (it was passed but the rules said "only TEAM MEMORY and WORKSPACE"). Each answer writes
+   `agent_events.kind: "context_window"` with per-section tokens, lines cut and the API's real `usage`. The full
+   analysis lane (`llm.ts`) is unchanged.
+Verified: worker typecheck 0, `npm test` 27/27 (`test/floor.test.ts`, `test/people.test.ts`, `test/window.test.ts`), web typecheck 0. **Not verified live**: I did not
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 
