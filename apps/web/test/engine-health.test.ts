@@ -21,6 +21,11 @@ test("end to end is loop plus speech, unknown until both are measured", () => {
   const e = base(); delete e.stages.say_to_audio; assert.equal(endToEnd(e), null);
 });
 
+test("questions answered by the fast lane are timed by fast_reply, not the full loop", () => {
+  const e = base(); e.stages.fast_reply = { p50: 1400, p95: 2100, n: 5 };
+  assert.equal(endToEnd(e), 1400 + 2316);
+});
+
 test("each problem has a case that produces only it", () => {
   assert.deepEqual(problems(base(), NOW), []);
   const two = base(); two.workers.push({ id: "b:2", lastAt: "2026-11-14T20:10:00Z", n: 1 });

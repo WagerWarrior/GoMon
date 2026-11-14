@@ -3,7 +3,7 @@
  * against target, hear-to-spoken end to end, the workers on this database, and anything wrong, worst first.
  * Every number is read from Atlas; LangSmith holds the per-call traces (gomon.handleBatch -> gomon.analyze).
  */
-import { endToEnd, pipeline, problems } from "@/lib/engine-health";
+import { answerPath, endToEnd, pipeline, problems } from "@/lib/engine-health";
 import type { engine } from "@/lib/engine";
 import { ms } from "@/lib/format";
 
@@ -20,7 +20,7 @@ export default function EngineCard({ e }: { e: Awaited<ReturnType<typeof engine>
         <span className="muted small">{e.window} · traces in LangSmith project <span className="mono">gomon</span></span>
       </div>
       <div className="en-head">
-        <div className="en-big"><span className="eyebrow">Heard → spoken p50</span><b>{ms(total)}</b><span className="muted small">loop {ms(e.stages.total?.p50 ?? null)} + speech {ms(e.stages.say_to_audio?.p50 ?? null)}</span></div>
+        <div className="en-big"><span className="eyebrow">Question → spoken p50</span><b>{ms(total)}</b><span className="muted small">{answerPath(e)?.label ?? "loop"} {ms(answerPath(e)?.p50 ?? null)} + speech {ms(e.stages.say_to_audio?.p50 ?? null)}{e.stages.fast_reply ? ` · background loop ${ms(e.stages.total?.p50 ?? null)}` : ""}</span></div>
         <div className={`en-verdict ${issues.some((i) => i.tone === "bad") ? "bad" : issues.length || over.length ? "warn" : "good"}`}>
           <i />{issues.length ? issues[0].text : `Loop healthy: one worker, no failed batches, nothing waiting${over.length ? `. Over target: ${over.map((n) => n.label).join(", ")}` : ""}`}
         </div>

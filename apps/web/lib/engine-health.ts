@@ -28,8 +28,11 @@ export function pipeline(e: EngineInput): Node[] {
   ];
 }
 
-/** Hear-to-spoken: the loop (total) plus speech. Null until both were measured. */
-export const endToEnd = (e: EngineInput) => (e.stages.total?.p50 != null && e.stages.say_to_audio?.p50 != null ? e.stages.total.p50 + e.stages.say_to_audio.p50 : null);
+/** The path a question to Gomon takes: the fast lane (worker fast.ts, timed as fast_reply) once it has run, else the full loop. */
+export const answerPath = (e: EngineInput) => (e.stages.fast_reply?.p50 != null ? { key: "fast_reply", label: "fast lane", p50: e.stages.fast_reply.p50 } : e.stages.total?.p50 != null ? { key: "total", label: "loop", p50: e.stages.total.p50 } : null);
+
+/** Question-to-spoken: the answer path plus speech. Null until both were measured. */
+export const endToEnd = (e: EngineInput) => { const a = answerPath(e); return a && e.stages.say_to_audio?.p50 != null ? a.p50 + e.stages.say_to_audio.p50 : null; };
 
 /** Engine-wide problems, worst first. One live worker per database is the rule (checkpoint plan). */
 export function problems(e: EngineInput, now = Date.now()): { tone: Tone; text: string }[] {
