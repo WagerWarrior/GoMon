@@ -7,8 +7,14 @@ import { when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 /** Start a meeting from the workspace: Gomon joins the Meet through Recall in one project. Also lists meetings it is in now. */
+/** Is the worker that sends the Recall bot reachable from this web server? Checked on every page load, 1.5 s cap. */
+async function workerUp(): Promise<{ ok: boolean; base: string }> {
+  const base = process.env.WORKER_URL || "http://localhost:3001";
+  try { const r = await fetch(`${base}/healthz`, { cache: "no-store", signal: AbortSignal.timeout(1500) }); return { ok: r.ok, base }; } catch { return { ok: false, base }; }
+}
+
 export default async function StartPage({ searchParams }: { searchParams: Promise<{ project?: string }> }) {
-  const [rows, tpl, who, inMeetings, names] = await Promise.all([projects(), templates(), people(), botCalls(), projectNames()]);
+  const [rows, tpl, who, inMeetings, names, worker] = await Promise.all([projects(), templates(), people(), botCalls(), projectNames(), workerUp()]);
   const working = rows.filter((p) => !p.company).map((p) => ({ id: p._id, name: p.name }));
   const fallback = scope().projectId;
   // An install without a projects row for PROJECT_ID still has its legacy calls there; offer it so the form is never empty.
@@ -23,7 +29,7 @@ export default async function StartPage({ searchParams }: { searchParams: Promis
         <Link href="/projects" className="p-more">Projects</Link>
       </header>
       <section className="p-row p-row-2-1">
-        <StartMeeting projects={options} templates={tplOptions} people={who} defaults={{ project, template: tplOptions.find((t) => t.id === "design-review")?.id ?? tplOptions[0]?.id ?? "" }} />
+        <StartMeeting worker={worker} projects={options} templates={tplOptions} people={who} defaults={{ project, template: tplOptions.find((t) => t.id === "design-review")?.id ?? tplOptions[0]?.id ?? "" }} />
         <div className="p-card">
           <div className="p-card-h"><h2>Gomon is in</h2><span className="muted small">{inMeetings.length ? `${inMeetings.length} meeting${inMeetings.length > 1 ? "s" : ""}` : "no meetings"}</span></div>
           <ul className="ws-list mt-list">

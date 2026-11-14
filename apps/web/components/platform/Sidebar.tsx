@@ -14,7 +14,7 @@ const ICON = {
   database: I("M8 2c3 0 5.5 1 5.5 2.3v7.4C13.5 13 11 14 8 14s-5.5-1-5.5-2.3V4.3C2.5 3 5 2 8 2zM2.5 4.3C2.5 5.6 5 6.6 8 6.6s5.5-1 5.5-2.3M2.5 8c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3"),
   models: I("M5.5 6v4M8 4v8M10.5 6.5v3M3 7.5v1M13 7.5v1"),
   start: I("M8 2.5v11M2.5 8h11"),
-  projects: I("M2 3.5h4l1.5 1.5H14v7.5H2z"),
+  projects: I("M8 2 14 5 8 8 2 5zM2 8l6 3 6-3M2 11l6 3 6-3"),
   chev: <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden><path d="m6 4 4 4-4 4" /></svg>,
 };
 

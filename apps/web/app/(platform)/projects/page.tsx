@@ -36,10 +36,13 @@ export default async function ProjectsPage() {
   );
 }
 
+/** Two-letter project mark: initials of the first two words ("Public API launch" -> "PA"). */
+const mark = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+
 function ProjectCard({ p }: { p: ProjectRow }) {
   return (
     <article className="p-card tp-card">
-      <div className="p-card-h"><h2>{p.name}</h2><span className="muted small mono">{p._id}</span></div>
+      <div className="pj-h"><span className="pj-mark" aria-hidden>{mark(p.name)}</span><div><h2>{p.name}</h2><span className="muted small mono">{p._id}</span></div></div>
       {p.description && <p className="tp-desc">{p.description}</p>}
       <dl className="tp-facts pj-facts">
         <div><dt>Sessions</dt><dd><Link href={`/sessions?project=${encodeURIComponent(p._id)}`}>{p.calls}</Link></dd></div>

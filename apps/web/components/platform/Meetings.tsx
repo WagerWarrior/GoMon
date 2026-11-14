@@ -10,7 +10,7 @@ import { send } from "./Templates";
 type Opt = { id: string; name: string };
 const ACTOR_KEY = "gomon.actor"; // same key as the session workspace's "Acting as" picker
 
-export function StartMeeting({ projects, templates, people, defaults }: { projects: Opt[]; templates: Opt[]; people: string[]; defaults: { project: string; template: string } }) {
+export function StartMeeting({ worker, projects, templates, people, defaults }: { worker: { ok: boolean; base: string }; projects: Opt[]; templates: Opt[]; people: string[]; defaults: { project: string; template: string } }) {
   const router = useRouter();
   const [f, setF] = useState({ meetingUrl: "", title: "", projectId: defaults.project, templateId: defaults.template });
   const [actor, setActor] = useState(people[0] ?? "");
@@ -18,7 +18,7 @@ export function StartMeeting({ projects, templates, people, defaults }: { projec
   useEffect(() => { const saved = localStorage.getItem(ACTOR_KEY); if (saved && people.includes(saved)) setActor(saved); }, [people]);
   const set = (k: keyof typeof f, v: string) => setF((x) => ({ ...x, [k]: v }));
   const url = f.meetingUrl.trim();
-  const ready = /^https:\/\/\S+$/.test(url) && !!f.projectId && !!actor;
+  const ready = worker.ok && /^https:\/\/\S+$/.test(url) && !!f.projectId && !!actor;
   async function start() {
     setBusy(true); setErr(null);
     try {
@@ -29,6 +29,7 @@ export function StartMeeting({ projects, templates, people, defaults }: { projec
   }
   return (
     <article className="p-card tp-card tp-form mt-form">
+      <div className={`mt-worker ${worker.ok ? "ok" : "off"}`}><i />{worker.ok ? "Worker online: Gomon can join now" : <>Worker offline at <code>{worker.base}</code>. Start apps/worker on this machine or set WORKER_URL to the live one.</>}</div>
       <input className="tp-in tp-name" value={f.meetingUrl} placeholder="https://meet.google.com/abc-defg-hij" aria-label="Meeting link" onChange={(e) => set("meetingUrl", e.target.value)} />
       <input className="tp-in" value={f.title} placeholder="Title, e.g. Rate limits design review" aria-label="Title" onChange={(e) => set("title", e.target.value)} />
       <div className="tp-row">
