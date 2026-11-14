@@ -92,8 +92,15 @@ Team memory pushed back (conflict -> memory key), Filed (links). It is stored on
    and only 8 still exist. Limit the reset to `synthetic: true` / `seed-*` ids, or record the demo call after the reset.
 2. A failed batch is never retried (`main.ts:92-95`): marked processed with an error, nothing spoken, no `timings` row.
    One retry, then "I hit an error, say that again", and a `timings` stage `failed`.
-3. Latency (24 h p50/p95): queue 1.7/2.1 s, retrieve 0.5/0.8 s, analyze 1.9/3.9 s, say_to_audio 2.3/3.2 s; heard -> spoken ~5.3 s.
-   Cheapest wins: no merge wait when the batch has a wake word, stream or pre-synthesize TTS. Full plan: branch `plan/agent-loop-latency`.
+3. Latency, ranked by measured cost (pull first: wake fix 34d98f4 in `wake.ts`, worker `npm test` 3/3, catches "Gomon" mid-turn):
+   a. Head-of-line blocking: a turn waits behind the background batch in flight (queue 4.2-7.0 s on 4 turns). Two lanes
+      per call: an addressed utterance runs at once; background capture batches stay serialized.
+   b. Merge wait by source: Scribe already commits whole turns, so use ~300 ms for `source: "scribe"`, keep 1200 ms for Recall.
+   c. Answer separate from capture: when addressed, a streamed text reply call speaks its first sentence as soon as it ends;
+      the JSON capture call keeps running on the same batch (addressed analyze is 4-6.6 s today, plus say_to_audio 2.3 s).
+   d. Prompt caching: `cache_control` on the system prompt + stable memory/workspace block (Haiku caches from 2048 tokens).
+   e. Barge-in: stop Gomon's audio when someone else's partial passes 5 words; the reply keeps working.
+   f. No LangGraph port before 5 PM; tracing already works.
 4. LangSmith token usage is 0 on every run (raw fetch): return `body.usage` from `analyze` / set `usage_metadata`.
 5. Connectors tests no longer touch Atlas (`MONGODB_TEST_URI` or local only); the 24 leftover `ctest_*` databases are dropped.
 
