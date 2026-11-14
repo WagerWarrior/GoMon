@@ -17,8 +17,11 @@ export function StartMeeting({ worker, projects, templates, people, defaults }: 
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { const saved = localStorage.getItem(ACTOR_KEY); if (saved && people.includes(saved)) setActor(saved); }, [people]);
   const set = (k: keyof typeof f, v: string) => setF((x) => ({ ...x, [k]: v }));
-  const url = f.meetingUrl.trim();
-  const ready = worker.ok && /^https:\/\/\S+$/.test(url) && !!f.projectId && !!actor;
+  // Links copied from Meet often lack the scheme ("meet.google.com/abc-defg-hij").
+  const raw = f.meetingUrl.trim();
+  const url = raw && !/^https?:\/\//i.test(raw) ? `https://${raw}` : raw.replace(/^http:\/\//i, "https://");
+  // The worker check ran at page load; a restart since then must not leave the button dead (the request reports errors).
+  const ready = /^https:\/\/\S+\.\S+/.test(url) && !!f.projectId && !!actor;
   async function start() {
     setBusy(true); setErr(null);
     try {
