@@ -7,6 +7,7 @@ import GomonAvatar from "@/components/GomonAvatar";
 const I = (d: string) => <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={d} /></svg>;
 const NAV = [
   { group: "Workspace", items: [
+    { href: "/mission", label: "Mission control", icon: I("M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3M8 5.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z") },
     { href: "/", label: "Overview", icon: I("M2.5 2.5h4.5v4.5h-4.5zM9 2.5h4.5v7H9zM2.5 9H7v4.5H2.5zM9 11.5h4.5v2H9z") },
     { href: "/sessions", label: "Sessions", icon: I("M2.5 4h11M2.5 8h11M2.5 12h7") },
     { href: "/memory", label: "Memory", icon: I("M8 2c3 0 5.5 1 5.5 2.3v7.4C13.5 13 11 14 8 14s-5.5-1-5.5-2.3V4.3C2.5 3 5 2 8 2zM2.5 4.3C2.5 5.6 5 6.6 8 6.6s5.5-1 5.5-2.3M2.5 8c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3") },

@@ -11,5 +11,5 @@ export function when(t: string | null | undefined) {
   const d = new Date(t); const today = new Date().toDateString() === d.toDateString();
   return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-export function clock(t: string | null | undefined) { return t ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"; }
+export function clock(t: string | null | undefined) { return t ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }) : "—"; }
 export function initials(n: string) { return n.split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase(); }
