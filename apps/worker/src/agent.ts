@@ -14,6 +14,7 @@ import { maybeRefreshSummary } from "./summary.ts";
 import { showCard } from "./card.ts";
 import { memoryFilter } from "./scope.ts";
 import { handleGithubIntent } from "./github-intent.ts";
+import { gateToWake } from "./floor.ts";
 
 export type Stored = Utterance & { _id: ObjectId };
 
@@ -156,7 +157,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     clearTimeout(ack.timer);
   }
   if (ack.spoken) await ack.spoken;
-  if (wakes.length) a.addressed = true;
+  // Only a spoken wake word addresses Gomon: the model may not decide a line was "for Gomon" (floor.ts, live evidence there).
+  gateToWake(a, wakes.length > 0);
   // Link requests are actions, not questions: if someone addressed Gomon and asked for a link, run share_link even when the
   // model chose to answer in words. A spoken key ("d 15") becomes the memory to look up.
   const lastWake = wakes[wakes.length - 1];
@@ -233,7 +235,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       void showCard(ctx.c, u.callId, "locking");
       await notify(ctx, u.callId, `locking in "${announced.map((t) => t.replace(/[.\s]+$/, "")).join("; ")}" in ${Math.round(tpl.vetoMs / 1000)} s. Say "wait" to stop it.`, "lock_announce", u._id);
     }
-    else if (held.length) await notify(ctx, u.callId, `not locking "${held.join("; ")}" on agreement alone: it conflicts with team memory. Say "lock it in" if you mean it.`, "command", u._id);
+    else if (held.length) await notify(ctx, u.callId, `not locking "${held.join("; ")}" on agreement alone: it conflicts with team memory. Say "Gomon, lock it in" if you mean it.`, "command", u._id);
     if (held.length) await ctx.c.auditEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), type: "lock_held", actor: speaker, reason: "agreement on an item with a high-severity conflict", ref: { items: held } });
   }
 

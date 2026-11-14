@@ -3,7 +3,7 @@
  * transcript segments go to the worker's loopback-only /ears routes (echo + duplicate guards live there).
  */
 export const dynamic = "force-dynamic";
-const ALLOWED = /^(token|utterance|active)$/;
+const ALLOWED = /^(token|utterance|partial|active)$/;
 
 async function forward(req: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const path = (await params).path.join("/");

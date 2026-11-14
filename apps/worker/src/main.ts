@@ -21,7 +21,7 @@ import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
 import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
 import { parseWake } from "./wake.ts";
 import { login, logout, userFromToken, userIdForDisplayName, visibleCallsFilter, type PublicUser } from "./auth.ts";
-import { startRecallVoice } from "./voice.ts";
+import { heard, startRecallVoice } from "./voice.ts";
 import { createBot, leaveBot } from "./recall.ts";
 import { createProjectWithBoard } from "./projects.ts";
 import { COMPANY_PROJECT } from "./scope.ts";
@@ -44,8 +44,11 @@ const WORKER_ID = `${hostname()}:${process.pid}`;
 const MAX_BATCH = 8;
 const MERGE_QUIET_MS = Number(process.env.MERGE_QUIET_MS || 1200);
 const MERGE_MAX_MS = Number(process.env.MERGE_MAX_MS || 3500);
-/** After Gomon answers, questions/requests within this window are treated as addressed even without the name. */
-const FOLLOW_UP_MS = 20_000;
+/**
+ * After Gomon answers, questions/requests within this window are treated as addressed even without the name. Off by default
+ * (Max, Nov 14): in the live demo it answered people talking to each other ("Is that a larf? Yeah, it"). FOLLOW_UP_MS=20000 turns it on.
+ */
+const FOLLOW_UP_MS = Number(process.env.FOLLOW_UP_MS || 0);
 const FOLLOW_UP = /\?\s*$|^(what|why|how|when|where|who|which|can|could|would|will|is|are|do|does|did|should|tell|show|give|post|drop|send|share|create|file|lock|and what|what about)\b/i;
 function sleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -191,7 +194,8 @@ async function postUtterance(b: Record<string, unknown>) {
   const { seq, projectId } = await ensureCall(callId, { speaker: speakerName, botId });
   // Follow-up window: right after Gomon answered, a question or request without the name is still addressed to it.
   const bare = text.replace(/^(\s*(um+|uh+|so|okay|ok|yeah|and|but|hmm+|right)[,.]?\s+)+/i, "");
-  const followUp = !parseWake(text).addressed && FOLLOW_UP.test(bare)
+  const woke = parseWake(text).addressed;
+  const followUp = FOLLOW_UP_MS > 0 && !woke && FOLLOW_UP.test(bare)
     && !!(await c.says.findOne({ callId, reason: { $in: ["addressed", "command"] }, createdAt: { $gte: new Date(Date.now() - FOLLOW_UP_MS) } }));
   const fast = wantsFastReply(followUp ? `Gomon, ${bare}` : text);
   const doc: Utterance = {
@@ -205,6 +209,8 @@ async function postUtterance(b: Record<string, unknown>) {
   };
   try {
     const r = await c.utterances.insertOne(doc);
+    // Heard its name: confirm at once (chime in the meeting, Thinking card, state line), before any model call.
+    if (woke && source !== "typed") void heard(c, callId, speakerName).catch((e) => console.error("[heard]", e instanceof Error ? e.message : e));
     // Questions to Gomon are answered now, not after the queue and the full analysis.
     if (fast) void callCtx(callId).then((cx) => fastReply(cx, { _id: r.insertedId, callId, seq, text, speaker: doc.speaker })).catch((e) => console.error("[fast]", e instanceof Error ? e.message : e));
     return { status: 201, data: { utteranceId: String(r.insertedId), seq, duplicate: false } };

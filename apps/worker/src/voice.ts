@@ -1,8 +1,11 @@
 /**
  * Voice out without a webpage: each queued `says` row for a call with a Recall bot is rendered by ElevenLabs (mp3) and played
  * into the meeting through Recall's Output Audio endpoint. Used when VOICE_OUT=recall (no public tunnel without a browser
- * warning page is needed for audio). Tradeoff: a clip cannot be cut off mid-line, so barge-in needs the camera-page path.
+ * warning page is needed for audio).
+ * Floor (Max, Nov 14): `heard` plays a short chime the moment someone says the wake word, before any model call, and
+ * `stopSpeaking` cuts the clip (Recall DELETE output_audio) when a person says "stop" or talks over Gomon (floor.ts).
  */
+import { readFileSync } from "node:fs";
 import type { ChangeStreamInsertDocument } from "mongodb";
 import type { Cols } from "./db.ts";
 import type { Say } from "./shapes.ts";
@@ -22,6 +25,19 @@ const STALE_MS = 20_000;
 const FLOOR_QUIET_MS = 1500;
 const UNPROMPTED: ReadonlySet<Say["reason"]> = new Set(["conflict", "already_decided", "suggestion"]);
 const cache = new Map<string, Buffer>();
+const sound = (name: string) => readFileSync(new URL(`../public/sounds/${name}.mp3`, import.meta.url));
+/** Two rising tones, 0.36 s: "I heard my name, working on it". */
+const CHIME = sound("heard");
+const SILENCE = sound("silence");
+/** True once startRecallVoice runs (VOICE_OUT=recall): this process is the one speaking into meetings. */
+let voiceOn = false;
+/** The line Gomon is saying right now, per call. `cut` ends the wait for the clip so the queue moves on. */
+const speakingNow = new Map<string, { say: Say; cut: () => void }>();
+/** When each call's floor was last taken back: lines created before that are never spoken. */
+const cutAt = new Map<string, number>();
+const wasCut = (s: Say) => (cutAt.get(s.callId) ?? 0) >= s.createdAt.getTime();
+
+export const speakingText = (callId: string): string | null => speakingNow.get(callId)?.say.text ?? null;
 
 export async function ttsMp3(text: string, voiceId?: string): Promise<Buffer> {
   const voice = voiceId || env.voice();
@@ -48,6 +64,57 @@ export async function playInMeeting(botId: string, mp3: Buffer): Promise<void> {
   if (!res.ok) throw new Error(`Recall output_audio ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
+/** Stop the clip that is playing. Recall's DELETE ends it; if that is refused, a silent clip replaces it. */
+async function stopAudio(botId: string): Promise<void> {
+  const res = await fetch(`https://${env.region()}.recall.ai/api/v1/bot/${botId}/output_audio/`, {
+    method: "DELETE", headers: { authorization: `Token ${env.recallKey()}`, accept: "application/json" },
+  });
+  if (!res.ok) await playInMeeting(botId, SILENCE);
+}
+
+const botOf = async (c: Cols, callId: string) => {
+  const call = await c.calls.findOne({ _id: callId as never }, { projection: { botId: 1, teamId: 1, projectId: 1 } });
+  return { botId: typeof call?.botId === "string" ? call.botId : "", teamId: String(call?.teamId ?? ""), projectId: String(call?.projectId ?? "") };
+};
+
+/**
+ * A person took the floor: cut the clip, drop this call's lines that were already waiting, and say why in agent_events.
+ * Returns false when Gomon was not speaking. `why`: stop_word | talk_over | wake_word.
+ */
+export async function stopSpeaking(c: Cols, callId: string, why: string, heardText = ""): Promise<boolean> {
+  const cur = speakingNow.get(callId);
+  if (!cur) return false;
+  speakingNow.delete(callId);
+  cutAt.set(callId, Date.now());
+  cur.cut();
+  const { botId } = await botOf(c, callId);
+  const now = new Date();
+  await Promise.all([
+    botId ? stopAudio(botId).catch((e) => console.error("[voice] stop failed:", e instanceof Error ? e.message : e)) : Promise.resolve(),
+    c.says.updateMany({ callId, status: { $in: ["queued", "started"] }, createdAt: { $lte: now } }, { $set: { status: "cancelled", cancelledBy: why, updatedAt: now } }),
+    c.agentEvents.insertOne({ callId, teamId: cur.say.teamId, projectId: cur.say.projectId, at: now, kind: "barge_in", why, heard: heardText.slice(0, 200), cut: cur.say.text }),
+    c.calls.updateOne({ _id: callId as never }, { $set: { agentState: { state: "listening", detail: why === "wake_word" ? "stopped: new question" : "stopped: someone took the floor", at: now } } }),
+  ]);
+  void showCard(c, callId, "listening", { force: true });
+  return true;
+}
+
+/**
+ * Someone said the wake word: confirm it before any model call. Cuts an answer still playing (the new question wins), shows
+ * Thinking, writes the state line the workspace shows, and plays the chime into the meeting. Timed as `wake_to_chime`.
+ */
+export async function heard(c: Cols, callId: string, who: string): Promise<void> {
+  const t0 = Date.now();
+  await stopSpeaking(c, callId, "wake_word");
+  await c.calls.updateOne({ _id: callId as never }, { $set: { agentState: { state: "searching", detail: `heard ${who.split(" ")[0]}, checking team memory`, at: new Date() } } });
+  void showCard(c, callId, "thinking");
+  if (!voiceOn || process.env.HEARD_CHIME === "off") return;
+  const { botId, teamId, projectId } = await botOf(c, callId);
+  if (!botId) return;
+  await playInMeeting(botId, CHIME);
+  await c.timings.insertOne({ callId, teamId, projectId, stage: "wake_to_chime", ms: Date.now() - t0, at: new Date() });
+}
+
 /** Rough spoken duration so consecutive clips don't overlap (Recall plays each clip as it arrives). */
 const spokenMs = (text: string) => Math.max(1200, Math.round(text.split(/\s+/).length * 330));
 
@@ -66,7 +133,7 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
   const speak = async (s: Say) => {
     const call = await c.calls.findOne({ _id: s.callId as never }, { projection: { botId: 1 } });
     const botId = typeof call?.botId === "string" ? call.botId : "";
-    if (!botId) return;
+    if (!botId || wasCut(s)) return;
     if (UNPROMPTED.has(s.reason)) await floorFree(s.callId, s.createdAt);
     if (Date.now() - s.createdAt.getTime() > STALE_MS) {
       await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "cancelled", updatedAt: new Date() } });
@@ -75,16 +142,24 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
     const t0 = Date.now();
     try {
       const mp3 = await ttsMp3(s.text, s.voiceId);
+      // The floor was taken back while this line was waiting or rendering: it is already marked cancelled.
+      if (wasCut(s)) return;
       await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "started", updatedAt: new Date() } });
       void showCard(c, s.callId, "speaking", { forMs: spokenMs(s.text) });
+      const { promise: cutOff, resolve: cut } = Promise.withResolvers<void>();
+      speakingNow.set(s.callId, { say: s, cut });
       await playInMeeting(botId, mp3);
       await c.timings.insertOne({ callId: s.callId, teamId: s.teamId, projectId: s.projectId, stage: "say_to_audio", ms: Date.now() - t0, at: new Date() });
       log(`[voice] ${s.reason} -> meeting (${Date.now() - t0} ms): ${s.text.slice(0, 70)}`);
-      await new Promise((r) => setTimeout(r, spokenMs(s.text)));
+      // Until the clip ends, or until a person takes the floor (stopSpeaking resolves cutOff and marks the line cancelled).
+      await Promise.race([new Promise((r) => setTimeout(r, spokenMs(s.text))), cutOff]);
+      if (speakingNow.get(s.callId)?.say.sayId !== s.sayId) return;
+      speakingNow.delete(s.callId);
       void showCard(c, s.callId, "listening", { force: true });
-      await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "done", updatedAt: new Date() } });
+      await c.says.updateOne({ sayId: s.sayId, status: "started" }, { $set: { status: "done", updatedAt: new Date() } });
     } catch (e) {
       log("[voice] failed:", e instanceof Error ? e.message : e);
+      if (speakingNow.get(s.callId)?.say.sayId === s.sayId) speakingNow.delete(s.callId);
       await c.says.updateOne({ sayId: s.sayId }, { $set: { status: "failed", updatedAt: new Date() } });
     }
   };
@@ -94,6 +169,7 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
     const prev = queues.get(s.callId) ?? Promise.resolve();
     queues.set(s.callId, prev.then(() => speak(s)));
   });
+  voiceOn = true;
   void ttsMp3("On it.").catch(() => {}); // warm the cache for the instant acknowledgment
   log(`[voice] speaking through Recall output_audio (model ${env.model()})`);
   return () => cs.close();

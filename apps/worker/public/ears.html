@@ -106,6 +106,14 @@ async function connectScribe(channel) {
     const e = JSON.parse(m.data);
     if (e.message_type === "partial_transcript") {
       $("p-" + channel).textContent = e.text ? `${channel}: ${e.text}` : "";
+      // Barge-in: tell the worker what a person is saying right now and for how long, so Gomon stops when talked over.
+      if (e.text?.trim()) {
+        ws.turnStart ??= performance.now();
+        if (performance.now() - (ws.lastPartial ?? 0) > 250) {
+          ws.lastPartial = performance.now();
+          void fetch("/ears/partial", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ callId: $("callId").value, text: e.text, ms: Math.round(performance.now() - ws.turnStart), channel }) }).catch(() => {});
+        }
+      } else ws.turnStart = undefined;
       // Don't let a monologue become one 45 s segment: commit early when Gomon is addressed and the turn looks done, or when
       // the segment gets long. At most one forced commit per 2 s (Scribe throttles commits).
       const n = (e.text ?? "").split(/\s+/).filter(Boolean).length;
@@ -117,6 +125,7 @@ async function connectScribe(channel) {
     }
     else if (e.message_type === "committed_transcript" && e.text?.trim()) {
       $("p-" + channel).textContent = "";
+      ws.turnStart = undefined;
       const speaker = channel === "mic" ? $("me").value : $("remote").value;
       // Mic waits a moment: without headphones it also hears the meeting, and the meeting copy has the right speaker.
       if (channel === "mic") await new Promise((r) => setTimeout(r, 700));

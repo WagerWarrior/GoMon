@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 
 type Channel = "meeting" | "mic";
 type Status = { text: string; tone: "off" | "live" | "err" };
-type Entry = { channel: Channel; media: MediaStream; ws: WebSocket; lastCommit: number };
+type Entry = { channel: Channel; media: MediaStream; ws: WebSocket; lastCommit: number; turnStart?: number; lastPartial?: number };
 type ScribeEvent = { message_type: string; text?: string; turn_probability?: number; error?: string; message?: string };
 
 const RATE = 16000;
@@ -58,12 +58,21 @@ export default function Listen({ callId, defaultMe, defaultRemote }: { callId: s
       if (e.message_type === "partial_transcript") {
         const n = (e.text ?? "").split(/\s+/).filter(Boolean).length;
         const addressed = /\bgo\s?mon\b/i.test(e.text ?? "");
+        // Barge-in: the worker stops Gomon when a person says "stop" or talks over it (worker floor.ts). Never stored.
+        if (self && n) {
+          self.turnStart ??= performance.now();
+          if (performance.now() - (self.lastPartial ?? 0) > 250) {
+            self.lastPartial = performance.now();
+            void fetch("/api/ears/partial", { method: "POST", body: JSON.stringify({ callId, text: e.text, ms: Math.round(performance.now() - self.turnStart), channel }) }).catch(() => {});
+          }
+        } else if (self) self.turnStart = undefined;
         if (self && n && (n >= 30 || (addressed && (e.turn_probability ?? 0) >= 0.5)) && performance.now() - self.lastCommit > 2000) {
           self.lastCommit = performance.now();
           ws.send(JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: "", commit: true, sample_rate: RATE }));
         }
       } else if (e.message_type === "committed_transcript" && e.text?.trim()) {
         const speaker = channel === "mic" ? names.current.me : names.current.remote;
+        if (self) self.turnStart = undefined;
         if (channel === "mic") await new Promise((res) => setTimeout(res, 700));
         await fetch("/api/ears/utterance", { method: "POST", body: JSON.stringify({ callId, speaker, text: e.text, channel }) });
         setLast(`${speaker}: ${e.text}`);

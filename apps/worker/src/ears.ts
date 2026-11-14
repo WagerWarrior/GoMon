@@ -5,6 +5,7 @@
  *   GET  /ears              the capture page (public/ears.html)
  *   GET  /ears/token        single-use Scribe token (the API key never reaches the browser)
  *   POST /ears/utterance    { callId, speaker, text, channel: "meeting" | "mic" } -> utterance (source "scribe")
+ *   POST /ears/partial      { callId, text, ms } words a person is saying right now: only used to stop Gomon (barge-in), never stored
  * Loopback only: these routes skip WORKER_TOKEN because they never leave the machine.
  */
 import { readFile } from "node:fs/promises";
@@ -12,6 +13,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { Cols } from "./db.ts";
 import { config } from "./config.ts";
+import { bargeIn } from "./floor.ts";
+import { speakingText, stopSpeaking } from "./voice.ts";
 
 type PostUtterance = (b: Record<string, unknown>) => Promise<{ status: number; data: unknown }>;
 
@@ -89,7 +92,7 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
     send(res, r.status, r.data);
     return true;
   }
-  if (req.method === "POST" && url.pathname === "/ears/utterance") {
+  if (req.method === "POST" && (url.pathname === "/ears/utterance" || url.pathname === "/ears/partial")) {
     const b = await json(req);
     const raw = typeof b.callId === "string" ? b.callId.trim() : "";
     // A Meet link pasted as the call id means "the call Gomon joined for that meeting" (latest one with that meetingUrl).
@@ -99,6 +102,11 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
     const callId = byUrl ? String(byUrl._id) : raw;
     const text = typeof b.text === "string" ? b.text.trim() : "";
     if (!callId || !text) { send(res, 400, { error: "callId and text required" }); return true; }
+    // Barge-in first (the echo guard below would drop a bare "Stop." heard while Gomon talks): "stop", 5+ words over it,
+    // or 1.2 s of talking cuts the clip. Partials are used for this and nothing else.
+    const barge = bargeIn(text, speakingText(callId), Number(b.ms) || 0);
+    if (barge) await stopSpeaking(c, callId, barge, text);
+    if (url.pathname === "/ears/partial") { send(res, 200, { stopped: barge }); return true; }
     if (await isEcho(c, callId, text)) {
       await c.agentEvents.insertOne({ callId, teamId: config.teamId, projectId: config.projectId, at: new Date(), kind: "echo_dropped", text, channel: b.channel });
       send(res, 200, { dropped: "echo" });
