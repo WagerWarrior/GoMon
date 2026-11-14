@@ -14,7 +14,7 @@ import { checkPolicy } from "./policy";
 const WINDOW_MS = 6 * 3600_000; // only calls that ended recently; seeded history never back-fires
 const MAX_LINES = 8;
 
-export type Recap = { text: string; counts: { decisions: number; changes: number; actions: number; questions: number; conflicts: number; filed: number } };
+export type Recap = { text: string; counts: { decisions: number; tasks: number; changes: number; actions: number; questions: number; conflicts: number; filed: number } };
 
 const bullet = (xs: string[], more: number) => xs.map((x) => `• ${x}`).join("\n") + (more > 0 ? `\n• …and ${more} more` : "");
 const cut = (s: unknown, n = 160) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
@@ -33,11 +33,15 @@ export async function buildRecap(d: Db, call: any): Promise<Recap> {
   const seen = new Set<string>(); const pushback = conflicts.filter((c) => { const k = `${c.memoryKey}:${c.note}`; if (seen.has(k)) return false; seen.add(k); return true; });
 
   const mins = minutes(call.startedAt, call.endedAt); const people = (call.participants ?? []) as string[];
+  // Locked tasks (kind action, T- keys) are owned work, not decisions; everyone-agreed is the default, so only name a subset.
+  const tasks = decided.filter((m) => m.kind === "action"); const decisions = decided.filter((m) => m.kind !== "action");
+  const who = (m: any) => { const ps: string[] = m.lock?.participants ?? []; return ps.length && ps.length < people.length ? ` (${ps.join(", ")})` : ""; };
   const lines: string[] = [`*Recap: ${call.title ?? callId}*${mins ? ` · ${mins} min` : ""}${people.length ? ` · ${people.join(", ")}` : ""}`];
   if (typeof call.summary === "string" && call.summary.trim()) lines.push(cut(call.summary, 600));
   const section = (title: string, xs: string[]) => { if (xs.length) lines.push("", `*${title}*`, bullet(xs.slice(0, MAX_LINES), xs.length - MAX_LINES)); };
-  section("Decided", decided.map((m) => `${m.key ?? m.kind}: ${cut(m.text)}${m.lock?.participants?.length ? ` (${m.lock.participants.join(", ")})` : ""}`));
+  section("Decided", decisions.map((m) => `${m.key ?? m.kind}: ${cut(m.text)}${who(m)}`));
   if (!decided.length) lines.push("", "No decisions were locked in this call.");
+  section("Tasks", tasks.map((m) => `${m.key ?? "task"}: ${cut(m.text)}`));
   section("Changed in memory", changes.map((e) => `${e.type === "memory_forgotten" ? "Forgot" : "Corrected"} ${e.ref?.key ?? "a memory"}${e.reason ? `: ${cut(e.reason, 120)}` : ""} (${e.actor})`));
   section("Action items", actions.map((i) => cut(i.text)));
   section("Open questions", questions.map((i) => cut(i.text)));
@@ -45,7 +49,7 @@ export async function buildRecap(d: Db, call: any): Promise<Recap> {
   section("Filed", filed.map((a) => `${cut(a.payload?.title ?? a.type, 80)}: ${a.externalUrl}`));
   if (process.env.WEB_BASE_URL) lines.push("", `Full session: ${process.env.WEB_BASE_URL.replace(/\/$/, "")}/sessions/${encodeURIComponent(callId)}`);
 
-  return { text: lines.join("\n"), counts: { decisions: decided.length, changes: changes.length, actions: actions.length, questions: questions.length, conflicts: pushback.length, filed: filed.length } };
+  return { text: lines.join("\n"), counts: { decisions: decisions.length, tasks: tasks.length, changes: changes.length, actions: actions.length, questions: questions.length, conflicts: pushback.length, filed: filed.length } };
 }
 
 /** Recap every recently ended call once. Returns how many recaps were written. */

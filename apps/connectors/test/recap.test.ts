@@ -15,6 +15,8 @@ async function record(d: any) {
     sourceRefs: [{ type: "call", callId: "call-1" }], lock: { lockedAt: ago(5 * 60_000), participants: ["Priya", "Lena"], via: "voice" } });
   await d.collection("memories").insertOne({ teamId: TEAM, projectId: PROJECT, key: "D-12", kind: "decision", status: "active", version: 1, origin: "call", text: "Tiered buckets (older call)",
     sourceRefs: [{ type: "call", callId: "call-0" }], lock: { lockedAt: ago(86_400_000) } });
+  await d.collection("memories").insertOne({ teamId: TEAM, projectId: PROJECT, key: "T-04", kind: "action", status: "active", version: 1, origin: "call", text: "Lena load-tests the gateway by Friday",
+    sourceRefs: [{ type: "call", callId: "call-1" }], lock: { lockedAt: ago(3 * 60_000), participants: ["Lena", "Priya"] } });
   await d.collection("call_items").insertMany([
     { callId: "call-1", teamId: TEAM, projectId: PROJECT, kind: "action", text: "Priya drafts the 429 error format", status: "proposed", createdAt: ago(9e5) },
     { callId: "call-1", teamId: TEAM, projectId: PROJECT, kind: "open_question", text: "Do sandbox keys count toward limits?", status: "proposed", createdAt: ago(8e5) },
@@ -38,12 +40,14 @@ test("an ended call gets one recap: decisions, changes, owners' actions, open qu
     assert.match(t, /D-16.*rate-limit headers/);
     assert.doesNotMatch(t, /older call/, "decisions from other calls are not this call's");
     assert.match(t, /D-15.*burst is 3,000/);
+    assert.match(t, /\*Tasks\*\n• T-04: Lena load-tests/, "locked tasks get their own section");
+    assert.doesNotMatch(t, /D-16[^\n]*\(Priya, Lena\)/, "all-participant locks do not repeat the participant list");
     assert.match(t, /Priya drafts the 429 error format/);
     assert.doesNotMatch(t, /Rejected idea/);
     assert.match(t, /sandbox keys/);
     assert.match(t, /D-12.*Flat 100/);
     assert.match(t, /gh\.test\/issues\/7/);
-    assert.deepEqual(call.recap.counts, { decisions: 1, changes: 1, actions: 1, questions: 1, conflicts: 1, filed: 1 });
+    assert.deepEqual(call.recap.counts, { decisions: 1, tasks: 1, changes: 1, actions: 1, questions: 1, conflicts: 1, filed: 1 });
     const acts = await d.collection("actions").find({ type: "post_slack" }).toArray();
     assert.equal(acts.length, 1);
     assert.equal(acts[0].idempotencyKey, "recap:call-1");
@@ -85,6 +89,6 @@ test("an empty-but-real call still reads cleanly", async () => {
     await endedCall(d, { summary: undefined });
     const r = await buildRecap(d, (await d.collection("calls").findOne({ _id: "call-1" as any }))!);
     assert.match(r.text, /No decisions were locked/);
-    assert.deepEqual(r.counts, { decisions: 0, changes: 0, actions: 0, questions: 0, conflicts: 0, filed: 0 });
+    assert.deepEqual(r.counts, { decisions: 0, tasks: 0, changes: 0, actions: 0, questions: 0, conflicts: 0, filed: 0 });
   } finally { await done(); }
 });
