@@ -49,7 +49,8 @@ LLM: `LLM_PROVIDER=anthropic`, `LLM_API_KEY` in `.env.example`, default model `c
 - Toggle = update `enabled` (set `enabledAt: new Date()` when turning on, so old events do not back-fire). Status of each step = join `actionId` to `actions`.
 
 ## Slack channel: #agent-drop (C0CHU319A2V)
-Gomon posts to #agent-drop (Max, Nov 14; any worker with an old SLACK_CHANNEL_ID must pull and restart). Two connector workers on `gomon` are safe together (atomic claim, each action sent once).
+Gomon posts to #agent-drop (Max, Nov 14; any worker with an old SLACK_CHANNEL_ID must pull and restart). Two connector workers on `gomon` are safe together (atomic claim, each action sent once), and a worker only claims action types it has config for (no `GITHUB_TOKEN` = it never touches `create_issue`), so a half-configured worker cannot fail another's send. Live: D-16 on call `workflow-test-1` -> #agent-drop thread + GitHub issue #10.
+The Gomon app icon in Slack is the leaf face (`design/gomon/gomon-icon.png`, rebuilt by `node design/gomon/icon.mjs` + headless Chrome).
 
 ## Still open
 1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,
