@@ -3,7 +3,7 @@
 Owner: Max. Written for Rob's and Tamir's agents to read and reconcile against.
 Updated: 2026-11-14 (after Rob's worker landed). The spec (`spec.md`) wins on conflict.
 
-## For Rob: floor fixes from Max's live test, 59dbd2a (16:20). Needs a worker restart + ears/session page reload
+## For Rob: floor fixes from Max's live test, 59dbd2a (16:11). Needs a worker restart + ears/session page reload
 Max ran the demo and Gomon answered without its name. Evidence (call-202611142054-291b, `says` joined to their utterance):
 "How can we resolve the EU residency question?", "What do you think we should do?" and "Thank you. How is it like?" got
 `addressed` replies with no wake word (the analysis model set `addressed`), and the follow-up window answered "Is that a larf? Yeah, it".
@@ -17,7 +17,12 @@ Max ran the demo and Gomon answered without its name. Evidence (call-20261114205
    with Recall `DELETE /bot/{id}/output_audio/` (the endpoint answers 404 for an unknown bot and allows DELETE; a silent clip
    is the fallback), cancels waiting lines, writes `agent_events.kind: "barge_in"`. `/ears/partial` carries partial text from
    `public/ears.html` and the in-app `Listen.tsx` (proxy allows `partial`). Gomon's own voice is excluded by word overlap.
-Verified: worker typecheck 0, `npm test` 10/10 (new `test/floor.test.ts`), web typecheck 0. **Not verified live**: I did not
+4. **Names are learned** (b2b9428, `people.ts`): a misheard name that sounds like exactly one person resolves to them
+   ("Nade X0" -> naidx0, checked against the real `members`) and is saved as `members.aliases` / `users.aliases` with
+   `agent_events.kind: "alias_learned"`. `/ears/token` now also returns `keyterms` (people, logins, projects) that both
+   listeners pass to Scribe; a Scribe session with 8 keyterms started fine.
+5. **Live feed** (3fbcabc, `apps/web/lib/mission.ts`): shows the chime, fast-lane answers, interruptions and learned names.
+Verified: worker typecheck 0, `npm test` 15/15 (new `test/floor.test.ts`, `test/people.test.ts`), web typecheck 0. **Not verified live**: I did not
 start a second worker on the shared database or play audio into your meeting, so the chime and the DELETE are untested in a
 real Meet. If the chime misbehaves, `HEARD_CHIME=off`.
 
