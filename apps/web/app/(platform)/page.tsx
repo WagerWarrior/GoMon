@@ -2,12 +2,14 @@ import Link from "next/link";
 import AutoRefresh from "@/components/platform/AutoRefresh";
 import { activity, overview } from "@/lib/platform";
 import Latest from "@/components/platform/Latest";
+import EngineCard from "@/components/platform/EngineCard";
+import { engine } from "@/lib/engine";
 import { dur, ms, when } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 /** Mission control: the whole company at a glance. One session's live detail lives on its own page. */
 export default async function MissionControlHome() {
-  const [o, feed] = await Promise.all([overview(), activity(300)]);
+  const [o, feed, eng] = await Promise.all([overview(), activity(300), engine()]);
   const k = o.kpi; const r = o.reliability;
   const live = o.sessions.filter((s: any) => s.state === "live");
   const pct = (v: number | null) => (v == null ? "—" : `${v}%`);
@@ -29,6 +31,8 @@ export default async function MissionControlHome() {
           </Link>
         )) : <div className="mx-livecard mx-empty">No live sessions. The most recent was {when(o.sessions[0]?.lastAt)}.</div>}
       </section>
+
+      <EngineCard e={eng} />
 
       <section className="p-kpis p-kpis-5">
         <Kpi label="Sessions" v={k.sessions} />
