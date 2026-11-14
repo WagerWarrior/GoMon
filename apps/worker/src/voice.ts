@@ -34,12 +34,14 @@ const SILENCE = sound("silence");
 /** True once startRecallVoice runs (VOICE_OUT=recall): this process is the one speaking into meetings. */
 let voiceOn = false;
 /** The line Gomon is saying right now, per call. `cut` ends the wait for the clip so the queue moves on. */
-const speakingNow = new Map<string, { say: Say; cut: () => void }>();
+const speakingNow = new Map<string, { say: Say; cut: () => void; at: number }>();
 /** When each call's floor was last taken back: lines created before that are never spoken. */
 const cutAt = new Map<string, number>();
 const wasCut = (s: Say) => (cutAt.get(s.callId) ?? 0) >= s.createdAt.getTime();
 
 export const speakingText = (callId: string): string | null => speakingNow.get(callId)?.say.text ?? null;
+/** How long the current clip has been playing in the meeting (0 until Recall has it). */
+export const speakingForMs = (callId: string): number => { const at = speakingNow.get(callId)?.at; return at ? Date.now() - at : 0; };
 
 export async function ttsMp3(text: string, voiceId?: string): Promise<Buffer> {
   const voice = voiceId || env.voice();
@@ -199,9 +201,11 @@ export function startRecallVoice(c: Cols, log: (...a: unknown[]) => void): () =>
       if (wasCut(s)) return;
       void showCard(c, s.callId, "speaking", { forMs: spokenMs(s.text) });
       const { promise: cutOff, resolve: cut } = Promise.withResolvers<void>();
-      speakingNow.set(s.callId, { say: s, cut });
+      const now = { say: s, cut, at: 0 };
+      speakingNow.set(s.callId, now);
       // The clip goes to the meeting while the row is marked started, not after it (~100 ms sooner).
       await Promise.all([playInMeeting(botId, mp3), c.says.updateOne({ sayId: s.sayId, status: "queued" }, { $set: { status: "started", updatedAt: new Date() } })]);
+      now.at = Date.now(); // the clip is in the meeting from here: talk-over is measured against this
       await c.timings.insertOne({ callId: s.callId, teamId: s.teamId, projectId: s.projectId, stage: "say_to_audio", ms: Date.now() - t0, at: new Date() });
       log(`[voice] ${s.reason} -> meeting (${Date.now() - t0} ms): ${s.text.slice(0, 70)}`);
       // Until the clip ends, or until a person takes the floor (stopSpeaking resolves cutOff and marks the line cancelled).

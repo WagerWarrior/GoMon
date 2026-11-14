@@ -15,7 +15,7 @@ import type { Cols } from "./db.ts";
 import { config } from "./config.ts";
 import { bargeIn, echoShare } from "./floor.ts";
 import { keyterms } from "./people.ts";
-import { heard, namedInPartial, speakingText, stopSpeaking } from "./voice.ts";
+import { heard, namedInPartial, speakingForMs, speakingText, stopSpeaking } from "./voice.ts";
 
 type PostUtterance = (b: Record<string, unknown>) => Promise<{ status: number; data: unknown }>;
 
@@ -105,9 +105,9 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
     const callId = byUrl ? String(byUrl._id) : raw;
     const text = typeof b.text === "string" ? b.text.trim() : "";
     if (!callId || !text) { send(res, 400, { error: "callId and text required" }); return true; }
-    // Barge-in first (the echo guard below would drop a bare "Stop." heard while Gomon talks): "stop", 5+ words over it,
-    // or 1.2 s of talking cuts the clip. Partials are used for this and nothing else.
-    const barge = bargeIn(text, speakingText(callId), Number(b.ms) || 0);
+    // Barge-in first (the echo guard below would drop a bare "Stop." heard while Gomon talks): "stop", five words over it,
+    // or one second of talking over it cuts the clip (floor.ts).
+    const barge = bargeIn(text, speakingText(callId), Number(b.ms) || 0, speakingForMs(callId));
     if (barge) await stopSpeaking(c, callId, barge, text);
     if (url.pathname === "/ears/partial") {
       // The chime plays the moment the name is heard, mid-sentence, not when the sentence is finally committed (that made it

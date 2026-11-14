@@ -40,16 +40,30 @@ test("barge-in: 'stop' stops it at once", () => {
   assert.equal(bargeIn("Stop.", SAYING), "stop_word");
   assert.equal(bargeIn("okay Gomon stop", SAYING), "stop_word");
 });
-test("barge-in: five words over it stop it; four short ones under 1.2 s do not", () => {
-  assert.equal(bargeIn("no that is not what I meant", SAYING, 0, true), "talk_over");
-  assert.equal(bargeIn("no that is not what I meant", SAYING), null); // talk-over is opt-in (BARGE_TALK_OVER=on)
-  assert.equal(bargeIn("yeah okay sure", SAYING, 400), null);
+test("barge-in: five words said over it stop it", () => {
+  assert.equal(bargeIn("no that is not what I meant", SAYING, 2000, 2400), "talk_over");
+  assert.equal(bargeIn("yeah okay sure", SAYING, 400, 2000), null);
+  // committed sentence (no duration): only once the clip has been playing a while
+  assert.equal(bargeIn("no that is not what I meant", SAYING, 0, 2500), "talk_over");
+  assert.equal(bargeIn("no that is not what I meant", SAYING, 0, 600), null);
 });
-test("barge-in: talking for 1.2 s stops it", () => {
-  assert.equal(bargeIn("well actually", SAYING, 1300, true), "talk_over");
-  assert.equal(bargeIn("mm", SAYING, 1300), null);
+test("barge-in: one second of talk over it stops it", () => {
+  assert.equal(bargeIn("well actually", SAYING, 1300, 1400), "talk_over");
+  assert.equal(bargeIn("well actually", SAYING, 700, 1400), null);
+  assert.equal(bargeIn("mm", SAYING, 1300, 1400), null);
+});
+test("barge-in: the asker finishing their own question does not cut the answer", () => {
+  // 4 s into their turn, Gomon's clip started 0.5 s ago: almost none of it was said over Gomon
+  assert.equal(bargeIn("so can you tell me what we decided about the rate limits please", SAYING, 4000, 500), null);
+  assert.equal(bargeIn("so can you tell me what we decided about the rate limits please and", SAYING, 4600, 1100), null);
+  // ...but if they keep going a full second into the answer, it stops
+  assert.equal(bargeIn("so can you tell me what we decided about the rate limits please and also who", SAYING, 5200, 1700), "talk_over");
+});
+test("barge-in: BARGE_TALK_OVER=off leaves only the stop word", () => {
+  assert.equal(bargeIn("no that is not what I meant", SAYING, 2000, 2400, false), null);
+  assert.equal(bargeIn("Stop.", SAYING, 300, 2400, false), "stop_word");
 });
 test("barge-in: Gomon's own voice coming back through the meeting audio is not an interruption", () => {
-  assert.equal(bargeIn("Q-03 is the open question a separate EU central one Atlas cluster", SAYING, 2500), null);
+  assert.equal(bargeIn("Q-03 is the open question a separate EU central one Atlas cluster", SAYING, 2500, 2500), null);
   assert.equal(bargeIn("stop", "I'll stop the rollout once the EU cluster is live."), null);
 });
