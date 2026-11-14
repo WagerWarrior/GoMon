@@ -1,0 +1,7 @@
+{
+  "name": "gomon-avatar",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "devDependencies": { "esbuild": "0.24.0", "open-bot-avatar": "0.2.1" }
+}
