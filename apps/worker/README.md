@@ -9,7 +9,8 @@ cd apps/worker && npm install
 npm run setup               # collections + validators, TTL/unique indexes, memories_auto (Automated Embedding) + memories_text
 npm run seed                # synthetic Northwind team, members/roles, policies, design-doc memories; `-- --reset` wipes call data
 npm run verify              # live checks: hybrid retrieval, exact IDs, cross-team isolation, validator, TTL
-npm start                   # worker on :3001
+npm start                   # worker on :3001 (VOICE_OUT=recall npm start: the worker speaks into meetings itself)
+npm run join -- <meet_url> [callId] [title]       # send Gomon to a meeting (Recall bot, transcript webhook via PUBLIC_BASE_URL, voice via Output Audio)
 npm run say -- <callId> "<speaker>" "<text>"     # typed utterance (source "typed"), or `-- <callId> --script` to rehearse
 npm run inspect -- <callId>                       # dump what Gomon wrote for a call
 ```
@@ -72,9 +73,30 @@ engineer create denied and audited; lead create succeeded; a template `voiceId` 
   `/api/says/stream` (bot tile: show it, don't speak it).
 - "Hey Gomon, drop the GitHub link for D-15" → `share_link`: decision → its GitHub issue/Slack post from `actions.externalUrl`,
   "repo" → repo URL, else GitHub search (`GITHUB_TOKEN`), else latest link from the call. Posted to the meeting chat through
-  Recall `send_chat_message` (bot id parsed from the Recall `sourceKey`), and always stored in `chat_messages`.
-- Spoken replies must cite an active memory key or be "Nothing in team memory on that yet."; anything else is replaced and logged
-  as `agent_events.kind = ungrounded_reply_dropped`. Spoken lines use a conversational style; "On it." on every wake word.
+  Recall `send_chat_message` (bot id parsed from the Recall `sourceKey`), and always stored in `chat_messages`. Needs a sharing
+  verb ("send/drop/share/post … link"); "what's the latest issue?" is answered in words.
+- When addressed, the prompt also gets **workspace context** (`src/context.ts`): how long Gomon has been in the call, recent
+  locked decisions with their call, previous calls with ≥10 utterances, the repo's latest GitHub issues/PRs (60 s cache), and
+  Atlas memory counts. Each entry has a source id (`D-18`, `#14`, `call:<id>`, `atlas`).
+- Replies carry `replyKind`: `conversational` (about the call itself: "can you hear me"), `grounded` (must list `sources`; at
+  least one must be in the provided context and every spoken key must be active, else replaced with "I don't have anything on
+  that yet." and logged as `ungrounded_reply_dropped`), or `no_answer`.
+
+## Speech policy
+| Situation | Voice | Elsewhere |
+|---|---|---|
+| Addressed ("hey Gomon …") | answer; "On it." only if the answer takes >1.5 s and the request has 5+ words | — |
+| High-severity conflict (would break a locked decision / customer requirement) | once per memory per call, after a 1.5 s pause | conflicts panel |
+| Medium/low conflict, already decided | silent | conflicts panel |
+| Consensus lock announce / locked / held | silent (spoken only if meeting chat fails) | meeting chat + dashboard |
+| Suggestions | only `architecture-challenger` template | agent_events |
+
+## Voice out via Recall (`VOICE_OUT=recall`, `src/voice.ts`)
+Each `says` insert for a call with `calls.botId` → ElevenLabs mp3 (`VOICE_MODEL`, default `eleven_v4_turbo`) → Recall
+`POST /bot/{id}/output_audio/`. Bots must be created with `automatic_audio_output` (`npm run join` uses the greeting).
+Per-call serial queue, lines older than 20 s dropped, `timings.stage = say_to_audio` (measured ~1.7 s). No barge-in on this path
+(Recall clips can't be cut); the Output Media page (Tamir, PR #14) is the barge-in path. Run the bot page with `WORKER_URL=` so it
+only relays webhooks and doesn't also speak.
 
 ## Answers to MAX_NOTES questions
 1. **One database: `gomon`.** Call scratch (`call_items`, TTL) and canonical memory (`memories`) live in the same database, so
@@ -100,7 +122,14 @@ engineer create denied and audited; lead create succeeded; a template `voiceId` 
    (lock/correct/forget/tickets/Slack) through policy-checked transactions with audit rows, replies as `says`.
 6. A 1 s sweeper promotes `locking` items after the veto window (survives restarts).
 
-## Verified on the sandbox (typed utterances, not live audio)
+## Verified
+Live Google Meet (`checkpoint-2`, `live-meet-2`): Recall transcript → bot page → worker → Atlas; "flat 100, no bursts" flagged
+against D-18/R-12 and spoken through Recall Output Audio (say → audio ~1.7 s). Typed (`npm run say`), after the speech-policy
+change: "can you hear me" → conversational answer; "what did we decide in previous calls" → D-18/D-17 with call source;
+"latest GitHub issue" → "#14, the open barge-in PR"; "how many memories in Atlas" → counts by kind; "remote work policy" →
+"I don't have anything on remote work policy yet."; "maybe a sliding window" → medium conflict, silent.
+
+Earlier typed runs:
 - Flat-100 proposal → R-12 conflict spoken; per-request billing writes → D-09 / K-04 spoken.
 - "Agreed, let's do that" → lock announced → promoted to D-12 after 10 s with lock proof and audit.
 - "Create the tickets" → one queued `create_issue` action; "correct that, 3,000" → R-12 v2 supersedes v1.
@@ -109,4 +138,5 @@ engineer create denied and audited; lead create succeeded; a template `voiceId` 
 - Measured (7 utterances): retrieve avg 437 ms, analyze avg 3.1 s, total avg 4.4 s. Analysis latency is the bottleneck.
 
 ## Not done
-LangSmith traces are wired (`traceable`) but no `LANGSMITH_API_KEY` is set yet, so nothing is sent. No live-audio run yet.
+Barge-in on the Recall Output Audio path (clips can't be cut; use the Output Media page for that). Meeting-chat delivery
+(`send_chat_message`) is coded but not yet observed in a live Meet.

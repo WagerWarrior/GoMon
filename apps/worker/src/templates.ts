@@ -28,10 +28,11 @@ const FALLBACK: AgentTemplate = {
   ...BUILTIN_TEMPLATES[0], teamId: "", version: 1, createdAt: new Date(0), updatedAt: new Date(0), updatedBy: "system",
 };
 
-/** Per-proactivity speaking rules, read by the agent loop. */
+/** Per-proactivity speaking rules, read by the agent loop. Unprompted speech is limited to high-severity conflicts; spoken
+ *  suggestions exist only in the challenger template. */
 export const SPEAKING: Record<AgentTemplate["proactivity"], { conflictsPerBatch: number; suggestionWindowMs: number | null }> = {
   quiet: { conflictsPerBatch: 0, suggestionWindowMs: null },
-  balanced: { conflictsPerBatch: 1, suggestionWindowMs: 5 * 60_000 },
+  balanced: { conflictsPerBatch: 1, suggestionWindowMs: null },
   active: { conflictsPerBatch: 2, suggestionWindowMs: 2 * 60_000 },
 };
 

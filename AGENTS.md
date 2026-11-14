@@ -14,7 +14,7 @@
 - Every memory query and vector search filters by `teamId`, `projectId`, and `status: "active"`.
 - Correct and forget supersede or tombstone with history; they must remove the old memory from retrieval immediately.
 - External effects (GitHub, Slack) go only through the `actions` outbox with a policy check, requester identity, idempotency key, and recorded external ID. A request is not "created" until the external ID is stored.
-- Gomon speaks when addressed or for conflicts, already-decided topics, and lock announcements; alternatives at most once every 5 minutes.
+- Gomon speaks only when addressed, plus one exception: a high-severity conflict with canonical memory, once, at a pause. Lock progress goes to the meeting chat; suggestions are spoken only by the challenger template (spec §5, Agent loop).
 
 ## Delivery
 - Keep the shared contracts in `packages/shared` stable; change them only with the team.

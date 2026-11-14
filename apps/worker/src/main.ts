@@ -18,6 +18,7 @@ import type { AgentTemplate, Say, Utterance } from "./shapes.ts";
 import { DEFAULT_TEMPLATE_ID, parseTemplateInput } from "./templates.ts";
 import { parseWake } from "./wake.ts";
 import { login, logout, userFromToken, userIdForDisplayName, visibleCallsFilter } from "./auth.ts";
+import { startRecallVoice } from "./voice.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -315,6 +316,8 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(config.port, () => console.log(`[http] gomon worker on :${config.port} (db ${config.dbName}, ${config.teamId}/${config.projectId})`));
+// VOICE_OUT=recall: the worker speaks into meetings itself (ElevenLabs mp3 -> Recall output_audio); the bot page only relays webhooks.
+if (process.env.VOICE_OUT === "recall") startRecallVoice(c, console.log);
 setInterval(() => { sweepLocks(ctx).catch((e) => console.error("[locks]", e)); }, 1000);
 setInterval(() => { catchUp().catch((e) => console.error("[catchup]", e)); }, 15_000);
 await catchUp();

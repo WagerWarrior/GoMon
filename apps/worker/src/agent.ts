@@ -9,14 +9,18 @@ import type { CallItem, ItemKind, Say, Utterance } from "./shapes.ts";
 import { parseWake } from "./wake.ts";
 import { SPEAKING, templateFor } from "./templates.ts";
 import { postToMeetingChat, resolveLink } from "./links.ts";
+import { workspaceFor, type Workspace } from "./context.ts";
 
 export type Stored = Utterance & { _id: ObjectId };
 
 const RECENT_TURNS = 8;
 /** Exact text the bot page pre-caches (SAY_PRECACHE="On it."); change only together with apps/bot-page. */
 export const ACK_TEXT = "On it.";
-const NOTHING_IN_MEMORY = "Nothing in team memory on that yet.";
-const LINK_REQUEST = /\b(link|url|github|issue|ticket|repo|repository|slack thread|pull request|pr)\b/i;
+/** The ack is spoken only if the answer is not ready by then, so it always comes before the answer and quick replies skip it. */
+const ACK_DELAY_MS = 1500;
+const NO_ANSWER = "I don't have anything on that yet.";
+/** "drop the link", "send me the GitHub issue": a sharing verb plus a link-ish noun. "what's the latest issue" is a question, not this. */
+const LINK_REQUEST = /\b(send|drop|share|post|paste|put|give|open)\b.*\b(link|url|github|issue|ticket|repo|repository|pull request|pr)\b|\b(link|url)\b/i;
 
 /** Live agent state on the call document (listening | thinking | searching | answering), for the bot tile and the workspace. */
 async function setState(ctx: Ctx, callId: string, state: "listening" | "thinking" | "searching" | "answering", detail: string): Promise<void> {
@@ -33,6 +37,11 @@ async function timing(ctx: Ctx, callId: string, stage: string, ms: number, utter
 export async function say(ctx: Ctx, callId: string, text: string, reason: Say["reason"], priority: Say["priority"] = "normal", utteranceId?: ObjectId): Promise<void> {
   const now = new Date();
   await ctx.c.says.insertOne({ sayId: randomUUID(), callId, teamId: ctx.teamId, projectId: ctx.projectId, text, priority, reason, status: "queued", createdAt: now, updatedAt: now, utteranceId, ...(ctx.voiceId ? { voiceId: ctx.voiceId } : {}) });
+}
+
+/** Things nobody asked Gomon to say out loud (lock progress) go to the meeting chat; spoken only if the chat is unavailable. */
+async function notify(ctx: Ctx, callId: string, text: string, reason: Say["reason"], utteranceId?: ObjectId): Promise<void> {
+  if (!(await postToMeetingChat(ctx, callId, `Gomon: ${text}`))) await say(ctx, callId, text, reason, "normal", utteranceId);
 }
 
 /** Resolve "new:<i>" or an open item id to an item id. */
@@ -80,24 +89,43 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   // Sound-alike wake detection (ASR never spells "Gomon"); the addressed utterance's speaker is the command actor.
   const wakes = batch.map((b) => ({ b, w: parseWake(b.text) })).filter((x) => x.w.addressed);
   const speaker = (wakes[wakes.length - 1]?.b ?? u).speaker.displayName;
-  // Instant acknowledgment: the bot page starts audio ~0.35 s after a say and pre-caches this exact text (SAY_PRECACHE).
-  if (wakes.length) await say(ctx, u.callId, ACK_TEXT, "ack", "normal", u._id);
+  // Delayed acknowledgment for real requests (5+ words after the name): fires only if the answer takes longer than ACK_DELAY_MS.
+  const ack: { timer?: NodeJS.Timeout; spoken: Promise<void> | null } = { spoken: null };
+  if (wakes.some((x) => x.w.rest.split(/\s+/).filter(Boolean).length >= 5)) {
+    ack.timer = setTimeout(() => { ack.spoken = say(ctx, u.callId, ACK_TEXT, "ack", "normal", u._id); }, ACK_DELAY_MS);
+  }
 
-  const tR = Date.now();
-  await setState(ctx, u.callId, wakes.length ? "searching" : "thinking", wakes.length ? "searching team memory" : "reading the conversation");
-  const query = batch.map((b) => b.text).join(" ").slice(-600);
-  const memories: Retrieved[] = memoryEnabled ? await retrieve(ctx.c, ctx, query) : [];
-  const retrieveMs = Date.now() - tR;
+  let a: Analysis;
+  let memories: Retrieved[];
+  let workspace: Workspace | null = null;
+  let retrieveMs: number;
+  let analyzeMs: number;
+  try {
+    const tR = Date.now();
+    await setState(ctx, u.callId, wakes.length ? "searching" : "thinking", wakes.length ? "searching team memory" : "reading the conversation");
+    const query = batch.map((b) => b.text).join(" ").slice(-600);
+    // Previous calls, GitHub and Atlas stats only matter when someone is talking to Gomon; fetched alongside retrieval.
+    [memories, workspace] = await Promise.all([
+      memoryEnabled ? retrieve(ctx.c, ctx, query) : Promise.resolve([]),
+      wakes.length ? workspaceFor(ctx, u.callId) : Promise.resolve(null),
+    ]);
+    retrieveMs = Date.now() - tR;
 
-  const tA = Date.now();
-  const a: Analysis = await analyze(
-    recentDesc.reverse().map((r) => ({ id: String(r._id), speaker: r.speaker.displayName, text: r.text })),
-    batch.map((b) => ({ id: String(b._id), speaker: b.speaker.displayName, text: b.text })),
-    open.map((i) => ({ id: String(i._id), kind: i.kind, text: i.text, status: i.status })),
-    memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text })),
-    wakes.map((x) => ({ id: String(x.b._id), heardAs: x.w.heardAs ?? "" })),
-    { persona: tpl.persona, captureKinds: tpl.captureKinds },
-  );
+    const tA = Date.now();
+    a = await analyze(
+      recentDesc.reverse().map((r) => ({ id: String(r._id), speaker: r.speaker.displayName, text: r.text })),
+      batch.map((b) => ({ id: String(b._id), speaker: b.speaker.displayName, text: b.text })),
+      open.map((i) => ({ id: String(i._id), kind: i.kind, text: i.text, status: i.status })),
+      memories.map((m) => ({ id: String(m._id), key: m.key, kind: m.kind, text: m.text })),
+      wakes.map((x) => ({ id: String(x.b._id), heardAs: x.w.heardAs ?? "" })),
+      { persona: tpl.persona, captureKinds: tpl.captureKinds },
+      workspace,
+    );
+    analyzeMs = Date.now() - tA;
+  } finally {
+    clearTimeout(ack.timer);
+  }
+  if (ack.spoken) await ack.spoken;
   if (wakes.length) a.addressed = true;
   // Link requests are actions, not questions: if someone addressed Gomon and asked for a link, run share_link even when the
   // model chose to answer in words. A spoken key ("d 15") becomes the memory to look up.
@@ -106,7 +134,11 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     const key = /\b([a-z])[\s-]?(\d{1,3})\b/i.exec(lastWake.w.rest);
     a.command = { type: "share_link", memoryId: key ? `${key[1].toUpperCase()}-${key[2].padStart(2, "0")}` : "", itemRef: "", newText: "", query: lastWake.w.rest };
   }
-  const analyzeMs = Date.now() - tA;
+  // ...and questions are not link requests: without a sharing verb, a model-chosen share_link becomes the spoken reply.
+  if (lastWake && a.command.type === "share_link" && !LINK_REQUEST.test(lastWake.w.rest) && a.reply.trim()) {
+    a.command = { type: "none", memoryId: "", itemRef: "", newText: "", query: "" };
+  }
+
   const now = new Date();
 
   // 1. New scratch items (TTL-expiring until promoted).
@@ -129,7 +161,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     const mem = await resolveMemory(ctx, cf.memoryId, memories);
     if (!itemId || !mem) continue;
     const recentSpoken = await ctx.c.conflicts.findOne({ callId: u.callId, memoryId: mem._id, spoken: true, createdAt: { $gte: new Date(Date.now() - config.conflictRepeatMs) } });
-    const speak = cf.severity === "high" && !recentSpoken && spokenConflicts < rules.conflictsPerBatch;
+    // The only unprompted speech: a high-severity contradiction of canonical memory. "Already decided" stays on the dashboard.
+    const speak = cf.kind === "conflict" && cf.severity === "high" && !recentSpoken && spokenConflicts < rules.conflictsPerBatch;
     const ins = await ctx.c.conflicts.updateOne(
       { callId: u.callId, itemId, memoryId: mem._id },
       { $setOnInsert: { callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, itemId, memoryId: mem._id, memoryKey: mem.key, severity: cf.severity, kind: cf.kind, spoken: speak, note: cf.note, createdAt: now } },
@@ -137,7 +170,7 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
     );
     if (ins.upsertedCount && speak) {
       spokenConflicts++;
-      await say(ctx, u.callId, cf.note, cf.kind === "conflict" ? "conflict" : "already_decided", "high", u._id);
+      await say(ctx, u.callId, cf.note, "conflict", "high", u._id);
     }
   }
 
@@ -166,8 +199,8 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
       );
       if (it) announced.push(it.text);
     }
-    if (announced.length) await say(ctx, u.callId, `Locking in: ${announced.map((t) => t.replace(/[.\s]+$/, "")).join("; ")}. Say wait to stop me.`, "lock_announce", "high", u._id);
-    else if (held.length) await say(ctx, u.callId, "That one conflicts with team memory, so I won't lock it on agreement alone. Say lock it in if you mean it.", "command", "normal", u._id);
+    if (announced.length) await notify(ctx, u.callId, `locking in "${announced.map((t) => t.replace(/[.\s]+$/, "")).join("; ")}" in ${Math.round(tpl.vetoMs / 1000)} s. Say "wait" to stop it.`, "lock_announce", u._id);
+    else if (held.length) await notify(ctx, u.callId, `not locking "${held.join("; ")}" on agreement alone: it conflicts with team memory. Say "lock it in" if you mean it.`, "command", u._id);
     if (held.length) await ctx.c.auditEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), type: "lock_held", actor: speaker, reason: "agreement on an item with a high-severity conflict", ref: { items: held } });
   }
 
@@ -206,16 +239,30 @@ async function handleBatchImpl(ctx: Ctx, batch: Stored[]): Promise<void> {
   }
 
   // 6. Direct answer when addressed (skip if a command already produced the response). Grounding is enforced, not just asked:
-  //    a reply is spoken only if it cites a real active memory key, or is the exact "nothing in memory" line.
-  if (a.addressed && a.reply && a.command.type === "none") {
-    const cited = [...a.reply.matchAll(/\b([A-Z])-(\d{2,3})\b/g)].map((m) => m[0]);
-    const valid = cited.length
-      ? await ctx.c.memories.countDocuments({ teamId: ctx.teamId, projectId: ctx.projectId, status: "active", key: { $in: cited } })
-      : 0;
-    const grounded = valid > 0 || a.reply.startsWith(NOTHING_IN_MEMORY);
-    await setState(ctx, u.callId, "answering", grounded ? "answering from team memory" : "no grounded answer");
-    await say(ctx, u.callId, grounded ? a.reply : `${NOTHING_IN_MEMORY} Want me to log it as an open question?`, "addressed", "high", u._id);
-    if (!grounded) await ctx.c.agentEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "ungrounded_reply_dropped", reply: a.reply, cited });
+  //    a grounded reply is spoken only if it cites at least one source that was actually in its context, and every memory key it
+  //    says out loud exists. Conversational replies (about the call itself) need no source.
+  if (a.addressed && a.command.type === "none" && a.reply.trim()) {
+    let text = a.reply.trim();
+    if (a.replyKind === "grounded") {
+      const norm = (s: string) => s.trim().toUpperCase();
+      const known = new Set([
+        ...memories.flatMap((m) => [String(m._id), m.key ?? ""]), ...open.map((i) => String(i._id)), ...(workspace?.sources.map((s) => s.id) ?? []),
+      ].filter(Boolean).map(norm));
+      const keyLike = (s: string) => /^[A-Z]-\d{2,3}$/.test(s);
+      const spokenKeys = [...text.matchAll(/\b([A-Z])-(\d{2,3})\b/g)].map((m) => m[0]);
+      const askKeys = [...new Set([...a.sources.map(norm).filter(keyLike), ...spokenKeys])].filter((k) => !known.has(k));
+      const activeKeys = askKeys.length
+        ? new Set((await ctx.c.memories.find({ teamId: ctx.teamId, projectId: ctx.projectId, status: "active", key: { $in: askKeys } }).project({ key: 1 }).toArray()).map((m) => String(m.key)))
+        : new Set<string>();
+      const verified = a.sources.map(norm).filter((s) => known.has(s) || activeKeys.has(s));
+      const badKey = spokenKeys.some((k) => !known.has(k) && !activeKeys.has(k));
+      if (!verified.length || badKey) {
+        await ctx.c.agentEvents.insertOne({ callId: u.callId, teamId: ctx.teamId, projectId: ctx.projectId, at: new Date(), utteranceId: u._id, kind: "ungrounded_reply_dropped", reply: a.reply, cited: a.sources });
+        text = NO_ANSWER;
+      }
+    }
+    await setState(ctx, u.callId, "answering", a.replyKind === "grounded" && text !== NO_ANSWER ? "answering from team memory" : "answering");
+    await say(ctx, u.callId, text, "addressed", "high", u._id);
   }
 
   // 7. Rare proactive alternative, rate-limited per call.
@@ -256,11 +303,11 @@ export async function sweepLocks(ctx: Ctx): Promise<void> {
     const voiced: Ctx = { ...ctx, voiceId: (await templateFor(ctx.c, ctx.teamId, call?.templateId)).voiceId };
     try {
       const mem = await promoteItem(ctx, it._id, actor, "consensus");
-      if (mem) await say(voiced, it.callId, `Locked ${mem.key}.`, "lock_done");
+      if (mem) await notify(voiced, it.callId, `locked ${mem.key}: ${it.text}`, "lock_done");
     } catch (e) {
       if (!(e instanceof PolicyDenied)) throw e;
       await ctx.c.callItems.updateOne({ _id: it._id, status: "locking" }, { $set: { status: "proposed", updatedAt: new Date() }, $unset: { lockAnnouncedAt: "" } });
-      await say(voiced, it.callId, `I couldn't lock that: ${e.result.reason}.`, "command");
+      await notify(voiced, it.callId, `couldn't lock "${it.text}": ${e.result.reason}.`, "command");
     }
   }
 }

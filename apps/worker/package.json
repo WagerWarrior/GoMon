@@ -11,7 +11,8 @@
     "say": "node --env-file=../../.env --import tsx scripts/utter.ts",
     "verify": "node --env-file=../../.env --import tsx scripts/verify.ts",
     "typecheck": "tsc --noEmit",
-    "inspect": "node --env-file=../../.env --import tsx scripts/inspect.ts"
+    "inspect": "node --env-file=../../.env --import tsx scripts/inspect.ts",
+    "join": "node --env-file=../../.env --import tsx scripts/join.ts"
   },
   "dependencies": {
     "langsmith": "^0.12.0",

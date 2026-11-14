@@ -14,8 +14,8 @@ Engineering teams settle high-level design on calls: requirements, interfaces, t
 
 1. Listens and writes **call items** (proposed decisions, requirements, constraints, risks, open questions, actions, assumptions, interfaces, alternatives) to MongoDB Atlas in real time.
 2. Checks every item against the team’s **canonical memory** (past decisions, customer requirements, ingested design docs) with Atlas hybrid search.
-3. Speaks when addressed (“Gomon, …”) and selectively on its own: conflicts, re-debating a settled decision, consensus locks, and rare strong alternatives.
-4. Detects consensus, announces “Locking in: …”, and promotes the item to canonical memory unless someone objects.
+3. Speaks **only when addressed** (“Gomon, …”), answering from team memory, previous calls, GitHub and Atlas, with the source it used. The one unprompted interjection is a **serious conflict**: adopting what is being said would break a locked decision or a customer requirement. It waits for a pause, says it once, and everything else (re-debates, medium conflicts, suggestions) goes to the dashboard.
+4. Detects consensus, posts “Locking in: …” to the meeting chat with a 10-second veto (“wait” cancels), and promotes the item to canonical memory unless someone objects.
 5. Turns locked decisions into GitHub issues and Slack posts, each tied to the person who triggered it, policy-checked, and audited.
 6. Keeps memory governed: team-scoped, correctable, forgettable, with history, and provably changing what the agent does next time.
 
@@ -81,7 +81,8 @@ flowchart LR
 - TTS: ElevenLabs streaming TTS (low-latency model), voice pinned in config.
 - STT: Recall real-time transcripts in the primary path (speaker-labeled); ElevenLabs Scribe realtime in the fallback path.
 - Only committed/final transcript segments become utterances. Partial text never triggers actions.
-- One speech at a time; a new “Gomon” address cancels unspoken output. Barge-in is a stretch.
+- One speech at a time; a new “Gomon” address cancels unspoken output. Unprompted lines wait for a pause (floor control).
+- **Two voice-out paths.** (a) The Output Media bot page plays `says` and stops on `speech_on` (barge-in, draft PR #14). (b) `VOICE_OUT=recall`: the worker renders each line with ElevenLabs and plays it through Recall's Output Audio endpoint. This needs no browser-safe tunnel, since free tunnels put a warning page in front of the camera page. Clips cannot be cut off, so there is no barge-in on this path.
 
 ### Agent loop (Rob)
 For each committed utterance (change stream on `utterances`):
@@ -91,7 +92,7 @@ For each committed utterance (change stream on `utterances`):
 4. **Consensus:** when recent turns show agreement on an item (explicit “let’s do that / agreed / sounds good” plus no open objection), Gomon announces “Locking in: X.” A 10-second veto window opens; “wait / no / hold on” cancels. Otherwise a transaction promotes the item to `memories`, writes the audit event, and records present participants.
 5. **Commands:** “create the tickets”, “post to Slack”, “correct that …”, “forget that …” map to tools that write `actions` or memory updates, never directly to external systems.
 
-Proactive speech budget: conflicts, already-decided, and lock announcements always; alternative suggestions at most once every 5 minutes.
+Speech policy: answer when addressed (an “On it.” only if the answer takes longer than 1.5 s); interject unprompted only for a high-severity conflict, once per memory per call, after a pause; lock progress goes to the meeting chat; suggestions are spoken only by the *Architecture challenger* template. Grounded answers must cite a source that was in context (memory key, `#issue`, previous call, `atlas`), or Gomon says it has nothing on that.
 
 ### Workspace (Max)
 Next.js page per call, updated live from Atlas change streams through server-sent events:
