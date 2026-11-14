@@ -95,3 +95,12 @@ export function trailingAsk(prior: PriorLine[], speaker: string, lastSayAt: numb
 export function offeredAction(lastSay: string): boolean {
   return /\b(assign|file|create|lock|close|post|open|turn)\b[^.?!]*\?\s*$/i.test(lastSay.trim());
 }
+
+/**
+ * Speech-to-text spells memory keys loosely: "K-05" comes back as "KL5", "KO5", "K5" or "K 05" (live, Nov 14: "what's ticket
+ * KL5?" got "I don't have anything on that yet"). Rewrites those to the records' spelling. Only capital C, D, K, L, R, T (the
+ * key prefixes) followed by one or two digits; lowercase words and plain numbers are left alone. Pure.
+ */
+export function spokenKeys(text: string): string {
+  return text.replace(/\b([CDKLRT])(?:[\s-]?[LO])?[\s-]?(\d{1,2})\b/g, (_m, l: string, d: string) => `${l}-${d.padStart(2, "0")}`);
+}

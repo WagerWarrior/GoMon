@@ -29,7 +29,7 @@ import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
 import { handleAgentApi } from "./agentapi.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
-import { releaseHeld, routeAsk, nameOnly, offeredAction, trailingAsk, TRAIL_MS } from "./hold.ts";
+import { releaseHeld, routeAsk, nameOnly, offeredAction, trailingAsk, spokenKeys, TRAIL_MS } from "./hold.ts";
 import { sweepSpeakers } from "./speakers.ts";
 import { watchChatRequests } from "./chat-requests.ts";
 
@@ -218,7 +218,7 @@ async function postUtterance(b: Record<string, unknown>) {
   }
   // A cut-off ask ("Hey, Gomon." / "hey Gomon, can you like-") is held; the next sentence from the same speaker is its question.
   const route = trailing || duplicateName ? { hold: false, carried: null } : routeAsk(callId, speakerName, text);
-  const said = trailing ? `${trailing} ${text}` : route.carried ? `${route.carried} ${text}` : text;
+  const said = spokenKeys(trailing ? `${trailing} ${text}` : route.carried ? `${route.carried} ${text}` : text);
   const asked = offer && !route.hold ? `(Replying to your offer: "${offer}") ${said}` : said;
   const fast = !route.hold && !duplicateName && !offer && wantsFastReply(followUp ? `Gomon, ${bare}` : asked);
   const doc: Utterance = {

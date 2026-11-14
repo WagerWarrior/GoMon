@@ -81,3 +81,11 @@ test("an offer to act is recognised, a plain answer is not", () => {
   assert.equal(offeredAction("D-17 says one global Atlas cluster. Issue 24 is unassigned."), false);
   assert.equal(offeredAction("Did you mean D-02?"), false);
 });
+
+test("spoken memory keys are written the way the records spell them", async () => {
+  const { spokenKeys } = await import("../src/hold.ts");
+  assert.equal(spokenKeys("Hey Gomon, what's ticket KL5?"), "Hey Gomon, what's ticket K-05?");
+  assert.equal(spokenKeys("what's K5 and D17"), "what's K-05 and D-17");
+  assert.equal(spokenKeys("check K 05, T-04 and KO5"), "check K-05, T-04 and K-05");
+  assert.equal(spokenKeys("I have 5 tickets, a 5 minute call, issue 29"), "I have 5 tickets, a 5 minute call, issue 29");
+});
