@@ -1,7 +1,12 @@
 import http from "node:http";
 import { MongoClient } from "mongodb";
 
-export const URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true";
+/**
+ * Test database server. Never MONGODB_URI: a shell that loaded the repo .env would point tests at the shared Atlas cluster,
+ * and a test that dies before done() leaves a ctest_* database behind there. Opt in to a remote server with MONGODB_TEST_URI.
+ */
+export const testUri = (env: Record<string, string | undefined> = process.env) => env.MONGODB_TEST_URI || "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true";
+export const URI = testUri();
 export const TEAM = "northwind-platform", PROJECT = "public-api-launch";
 
 export async function freshDb() {
