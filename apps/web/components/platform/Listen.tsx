@@ -145,11 +145,11 @@ export default function Listen({ callId, defaultMe, defaultRemote }: { callId: s
   const dot = (s: Status) => <span className={`ls-dot ls-${s.tone}`} title={s.text} />;
   return (
     <div className="ls">
-      <button className={`ls-btn ${running ? "on" : ""}`} onClick={() => (running ? stop() : start())}>{running ? "■ Stop listening" : "● Listen to this meeting"}</button>
+      <button className={`ls-btn ${running ? "on" : ""}`} onClick={() => (running ? stop() : start())}><i />{running ? "Stop listening" : "Listen"}</button>
       {running ? (
-        <span className="ls-meters">{dot(status.meeting)} meeting {status.meeting.text} · {dot(status.mic)} you {status.mic.text}</span>
+        <span className="ls-meters">{dot(status.meeting)}meeting {status.meeting.text} {dot(status.mic)}you {status.mic.text}</span>
       ) : (
-        <span className="ls-names">you <input value={me} onChange={(e) => setMe(e.target.value)} /> others <input value={remote} onChange={(e) => setRemote(e.target.value)} /></span>
+        <span className="ls-names">you <input aria-label="Your name in the transcript" value={me} onChange={(e) => setMe(e.target.value)} /> others <input aria-label="Name for everyone else in the meeting" value={remote} onChange={(e) => setRemote(e.target.value)} /></span>
       )}
       {last && <span className="ls-last" title={last}>{last}</span>}
     </div>

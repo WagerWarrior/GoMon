@@ -823,11 +823,17 @@
 @media(max-width:640px){.en-pipe{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* In-app listener (components/platform/Listen.tsx) */
-.ls { display: flex; align-items: center; gap: 10px; font-size: 12px; min-width: 0; }
-.ls-btn { border: 1px solid #1a7f37; background: #1a7f37; color: #fff; border-radius: 999px; padding: 6px 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-.ls-btn.on { background: transparent; color: #cf222e; border-color: #cf222e; }
-.ls-names input { width: 110px; margin: 0 6px 0 4px; padding: 2px 6px; font-size: 12px; }
-.ls-meters { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ls-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 3px; background: #8c959f; }
-.ls-live { background: #1a7f37; } .ls-err { background: #cf222e; }
-.ls-last { opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+/* One hairline pill that never leaves the header: button, then who is who (or the two level dots), then the last line heard. */
+.ls{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:3px 12px 3px 3px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:12px;color:#5b5f5c;overflow:hidden}
+.ls-btn{flex:none;display:inline-flex;align-items:center;gap:6px;border:0;background:#0a0a0a;color:#fff;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap}
+.ls-btn i{width:7px;height:7px;border-radius:50%;background:#3fb950}
+.ls-btn.on{background:#fff;color:#0a0a0a;box-shadow:inset 0 0 0 1px var(--line)}
+.ls-btn.on i{background:#cf222e;border-radius:2px}
+.ls-names{display:inline-flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}
+.ls-names input{width:104px;min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;padding:1px 2px;margin-right:6px;font:inherit;color:#0a0a0a;text-overflow:ellipsis}
+.ls-names input:focus{outline:0;border-bottom-color:#0a0a0a}
+.ls-meters{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ls-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#8c959f}
+.ls-live{background:#1a7f37}.ls-err{background:#cf222e}
+.ls-last{flex:0 1 240px;min-width:0;opacity:.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:720px){.ls{flex-wrap:wrap;border-radius:16px}.ls-names input{width:84px}.ls-last{flex-basis:100%}}
