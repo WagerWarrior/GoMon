@@ -142,6 +142,7 @@ export async function stopSpeaking(c: Cols, callId: string, why: string, heardTe
  */
 export async function heard(c: Cols, callId: string, who: string): Promise<void> {
   const t0 = Date.now();
+  if (!chimeGate(callId, t0)) return;
   await stopSpeaking(c, callId, "wake_word");
   // The state line is written while the chime goes out, not before it (one Atlas round trip less before the sound).
   const state = c.calls
@@ -153,6 +154,20 @@ export async function heard(c: Cols, callId: string, who: string): Promise<void>
   await Promise.all([playInMeeting(botId, CHIME), state]);
   await c.timings.insertOne({ callId, teamId, projectId, stage: "wake_to_chime", ms: Date.now() - t0, at: new Date() });
 }
+
+/**
+ * One chime per turn. The name is caught on the live partial transcript (ears.ts) and again when the sentence is committed,
+ * and by both listening channels (mic and meeting tab) when the listener is in the call: only the first one in 4 s sounds.
+ */
+const chimedAt = new Map<string, number>();
+const CHIME_WINDOW_MS = 4000;
+export function chimeGate(callId: string, now = Date.now()): boolean {
+  if (now - (chimedAt.get(callId) ?? -Infinity) < CHIME_WINDOW_MS) return false;
+  chimedAt.set(callId, now);
+  return true;
+}
+/** The name, spelled out, in words a person is still saying (partials are revised, so no sound-alike matching here). */
+export const namedInPartial = (text: string): boolean => /\bgo\s?mon\b/i.test(text);
 
 /** Rough spoken duration so consecutive clips don't overlap (Recall plays each clip as it arrives). */
 const spokenMs = (text: string) => Math.max(1200, Math.round(text.split(/\s+/).length * 330));

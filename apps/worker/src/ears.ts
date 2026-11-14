@@ -13,9 +13,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { Cols } from "./db.ts";
 import { config } from "./config.ts";
-import { bargeIn } from "./floor.ts";
+import { bargeIn, echoShare } from "./floor.ts";
 import { keyterms } from "./people.ts";
-import { speakingText, stopSpeaking } from "./voice.ts";
+import { heard, namedInPartial, speakingText, stopSpeaking } from "./voice.ts";
 
 type PostUtterance = (b: Record<string, unknown>) => Promise<{ status: number; data: unknown }>;
 
@@ -109,7 +109,15 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
     // or 1.2 s of talking cuts the clip. Partials are used for this and nothing else.
     const barge = bargeIn(text, speakingText(callId), Number(b.ms) || 0);
     if (barge) await stopSpeaking(c, callId, barge, text);
-    if (url.pathname === "/ears/partial") { send(res, 200, { stopped: barge }); return true; }
+    if (url.pathname === "/ears/partial") {
+      // The chime plays the moment the name is heard, mid-sentence, not when the sentence is finally committed (that made it
+      // late on long questions and sometimes after the answer had started). Gomon's own voice coming back is not a wake.
+      const speaking = speakingText(callId);
+      const woke = namedInPartial(text) && !(speaking && echoShare(text, speaking) >= 0.5);
+      if (woke) void heard(c, callId, typeof b.speaker === "string" && b.speaker ? b.speaker : "you").catch((e) => console.error("[heard]", e instanceof Error ? e.message : e));
+      send(res, 200, { stopped: barge, woke });
+      return true;
+    }
     if (await isEcho(c, callId, text)) {
       await c.agentEvents.insertOne({ callId, teamId: config.teamId, projectId: config.projectId, at: new Date(), kind: "echo_dropped", text, channel: b.channel });
       send(res, 200, { dropped: "echo" });
