@@ -48,8 +48,8 @@ LLM: `LLM_PROVIDER=anthropic`, `LLM_API_KEY` in `.env.example`, default model `c
   locking D-14 on call `workflow-test-1` fired it; Slack post and GitHub issue #7 both `confirmed`.
 - Toggle = update `enabled` (set `enabledAt: new Date()` when turning on, so old events do not back-fire). Status of each step = join `actionId` to `actions`.
 
-## Slack channel: #testing-gomon-atlas (C0CHMM3CXNZ)
-Gomon posts to #testing-gomon-atlas (Max, Nov 14). Two connector workers on `gomon` are safe together (atomic claim, each action sent once).
+## Slack channel: #agent-drop (C0CHU319A2V)
+Gomon posts to #agent-drop (Max, Nov 14; any worker with an old SLACK_CHANNEL_ID must pull and restart). Two connector workers on `gomon` are safe together (atomic claim, each action sent once).
 
 ## Still open
 1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,

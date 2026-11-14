@@ -13,7 +13,7 @@ Secrets: copy the values you need into a repo-root `.env` (git-ignored); both ap
 - Atlas (cluster0, MongoDB 9.0.7): change streams drive the live workspace; lock / correct / forget run as
   transactions with audit events.
 - GitHub: outbox -> issues #2, #4, #5 in this repo, read back, status `confirmed`.
-- Slack: Gomon app in Hackathon 11/14, channel #testing-gomon-atlas. One thread per call, a reply per decision,
+- Slack: Gomon app in Hackathon 11/14, channel #agent-drop. One thread per call, a reply per decision,
   idempotency key in message metadata, read back, status `confirmed`. The worker joins the channel at start.
 - Ask Gomon (memory on vs off): Voyage `voyage-4` embeddings + Atlas Vector Search index `memories_vector`.
   Memory on cites the corrected D-07 and R-12 for the flat-limit proposal; memory off cites nothing.
