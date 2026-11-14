@@ -7,7 +7,8 @@ import { workflowRuns } from "@/lib/workflows";
 import { buildTimeline } from "@/lib/timeline";
 import SessionChat from "@/components/platform/SessionChat";
 import FlowDiagram from "@/components/platform/FlowDiagram";
-import { CategoryPicker } from "@/components/platform/SessionBar";
+import { CategoryPicker, ModePicker } from "@/components/platform/SessionBar";
+import { templates } from "@/lib/templates";
 import AutoRefresh from "@/components/platform/AutoRefresh";
 import { bursts, collapse } from "@/lib/group";
 import { clock, dur, when } from "@/lib/format";
@@ -18,7 +19,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
   const { callId: raw } = await params; const callId = decodeURIComponent(raw);
   const asked = (await searchParams).tab ?? "live";
   const tab = ["activity", "events", "decisions", "timings"].includes(asked) ? "activity" : "live";
-  const [s, list, m] = await Promise.all([session(callId), sessions(), mission(callId)]);
+  const [s, list, m, tpl] = await Promise.all([session(callId), sessions(), mission(callId), templates()]);
   const meta = list.find((x) => x.id === callId);
   if (!s.call) notFound();
   const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
@@ -30,6 +31,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
           <h1>{s.call.title || "Design call"}</h1>
           <span className="ss-meta"><span className={`ss-state s-${meta?.state ?? "ended"}`}><i />{meta?.state === "live" ? "Live" : meta?.state === "failed" ? "Failed" : "Ended"}</span>{when(s.call.startedAt)} · {dur(s.row?.durationMs)} · {[...(meta?.team ?? s.row?.participants ?? [])].join(", ")}{(meta?.guests ?? []).length ? ` + ${meta!.guests.join(", ")} (guest)` : ""}</span>
         </div>
+        <ModePicker callId={callId} current={s.call.templateId ?? "design-review"} options={tpl.rows.map((t: any) => ({ id: t._id, name: t.name }))} />
         <CategoryPicker callId={callId} current={meta?.category ?? "Design review"} />
         <nav className="ss-tabs"><Link href={href("live")} aria-current={tab === "live" ? "page" : undefined}>Live</Link><Link href={href("activity")} aria-current={tab === "activity" ? "page" : undefined}>Activity</Link></nav>
       </header>

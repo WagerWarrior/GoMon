@@ -110,7 +110,7 @@ export default function SessionChat({ callId, initialEntries, initialOps, initia
         <details className="tr-sec tr-ctx">
           <summary><span className="eyebrow">What Gomon sees each run</span><span className="small muted">harness</span></summary>
           <ul>
-            <li><b>Trigger</b> every batch of up to 8 new lines; it answers only when called by name (“hey Gomon”, matched by sound)</li>
+            <li><b>Trigger</b> every batch of up to 8 new lines is captured quietly; Gomon speaks when called by name (“hey Gomon”, matched by sound). Pick “Silent scribe” above to keep it quiet otherwise.</li>
             <li><b>Context</b> the last 8 turns + the new lines, up to 20 open items, top 6 team memories</li>
             <li><b>Memory search</b> Atlas vector + text, fused, filtered to this team, project and active memories</li>
             <li><b>Model</b> {lastRun?.model ?? "reasoning model"}, JSON out, up to 2,048 tokens</li>

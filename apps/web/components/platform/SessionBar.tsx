@@ -79,3 +79,17 @@ export function CategoryPicker({ callId, current }: { callId: string; current: s
     </label>
   );
 }
+
+/** How Gomon behaves in this call (agent template). Silent scribe = captures everything, speaks only when called by name. */
+export function ModePicker({ callId, current, options }: { callId: string; current: string; options: { id: string; name: string }[] }) {
+  const router = useRouter(); const [v, setV] = useState(current); const [busy, setBusy] = useState(false);
+  return (
+    <label className="sb-cat" title="How Gomon behaves in this call">
+      <select value={v} disabled={busy} onChange={async (e) => {
+        const next = e.target.value; setV(next); setBusy(true);
+        await fetch(`/api/sessions/${encodeURIComponent(callId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ templateId: next }) });
+        setBusy(false); router.refresh();
+      }}>{options.map((o) => <option key={o.id} value={o.id}>Gomon: {o.name}</option>)}</select>
+    </label>
+  );
+}
