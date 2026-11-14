@@ -86,6 +86,17 @@ Team memory pushed back (conflict -> memory key), Filed (links). It is stored on
 (web: show it on the session page), posted once into the call's Slack thread (`recap:<callId>`), and filed as
 `calls/<date>-<callId>.md` on the `gomon-records` branch (`doc:<callId>`, github op `write_doc`, never the default branch).
 
+## For Rob, before the 16:10 reset (agent-loop audit, 15:20)
+1. **`npm run seed -- --reset` deletes live calls.** `apps/worker/scripts/seed.ts:76-86` deleteMany's every call, utterance,
+   timing, agent_event, memory and action for the team, not just seeded ones: LangSmith traced 34 utterances 19:50-20:14 UTC
+   and only 8 still exist. Limit the reset to `synthetic: true` / `seed-*` ids, or record the demo call after the reset.
+2. A failed batch is never retried (`main.ts:92-95`): marked processed with an error, nothing spoken, no `timings` row.
+   One retry, then "I hit an error, say that again", and a `timings` stage `failed`.
+3. Latency (24 h p50/p95): queue 1.7/2.1 s, retrieve 0.5/0.8 s, analyze 1.9/3.9 s, say_to_audio 2.3/3.2 s; heard -> spoken ~5.3 s.
+   Cheapest wins: no merge wait when the batch has a wake word, stream or pre-synthesize TTS. Full plan: branch `plan/agent-loop-latency`.
+4. LangSmith token usage is 0 on every run (raw fetch): return `body.usage` from `analyze` / set `usage_metadata`.
+5. Connectors tests no longer touch Atlas (`MONGODB_TEST_URI` or local only); the 24 leftover `ctest_*` databases are dropped.
+
 ## Still open
 1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,
    tell us which database the workspace reads and how promotion crosses (it cannot share one transaction).
