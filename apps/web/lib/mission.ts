@@ -92,7 +92,7 @@ async function loadMission(want?: string) {
 }
 
 export async function command(input: { callId?: string; mode?: string; text?: string }) {
-  const text = String(input.text ?? "").trim().slice(0, 600);
+  const text = String(input.text ?? "").trim().slice(0, input.mode === "say" ? 600 : 2000); // spoken lines stay short; prompts may carry attached context
   const callId = String(input.callId ?? "").trim();
   if (!text || !callId) return { status: 400, data: { error: "callId and text are required" } };
   const d = await db(); const { teamId, projectId } = scope(); const now = new Date();

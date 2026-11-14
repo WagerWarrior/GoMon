@@ -24,7 +24,7 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
   if (!s.call) notFound();
   const href = (t: string) => `/sessions/${encodeURIComponent(callId)}?tab=${t}`;
   return (
-    <div className="ss">
+    <div className={`ss ${tab === "live" ? "ss-live" : ""}`}>
       <header className="ss-bar">
         <Link href="/sessions" className="ss-back" aria-label="All sessions">←</Link>
         <div className="ss-name">

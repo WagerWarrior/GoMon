@@ -26,7 +26,18 @@ export default function SessionChat({ callId, initialEntries, initialOps, initia
   const [entries, setEntries] = useState(initialEntries);
   const [ops, setOps] = useState(initialOps); const [ctx, setCtx] = useState(initialContext);
   const [now, setNow] = useState(Date.now());
-  const [mode, setMode] = useState<"prompt" | "say">("prompt");
+  const [speak, setSpeak] = useState(false);
+  const [att, setAtt] = useState<{ kind: "file" | "memory"; label: string; body: string }[]>([]);
+  const [picker, setPicker] = useState(false); const [q, setQ] = useState(""); const [found, setFound] = useState<any[]>([]);
+  const fileIn = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (!picker) return; const t = setTimeout(() => { fetch(`/api/memories?q=${encodeURIComponent(q)}`).then((r) => r.json()).then((j) => setFound(j.rows ?? [])).catch(() => {}); }, 150); return () => clearTimeout(t); }, [q, picker]);
+  async function addFiles(files: FileList | null) {
+    for (const f of Array.from(files ?? []).slice(0, 3)) {
+      if (f.size > 200_000) { setNote(`${f.name} is too big (max 200 KB of text)`); continue; }
+      const body = (await f.text()).replace(/\s+\n/g, "\n").slice(0, 1200);
+      setAtt((a) => [...a, { kind: "file", label: f.name, body }]);
+    }
+  }
   const [text, setText] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null); const stick = useRef(true);
 
@@ -58,9 +69,11 @@ export default function SessionChat({ callId, initialEntries, initialOps, initia
   async function send() {
     if (!text.trim()) return;
     setBusy(true); setNote(null); stick.current = true;
-    const r = await fetch("/api/mission/command", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ callId, mode, text }) });
+    const ctxText = att.map((x) => (x.kind === "memory" ? x.body : `File ${x.label}:\n${x.body}`)).join("\n\n");
+    const body = speak ? text : (ctxText ? `${text}\n\nContext I attached:\n${ctxText}` : text).slice(0, 2000);
+    const r = await fetch("/api/mission/command", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ callId, mode: speak ? "say" : "prompt", text: body }) });
     const j = await r.json().catch(() => ({})); setBusy(false);
-    if (r.ok) { setText(""); setNote(mode === "say" ? "Queued: the bot says it in the meeting." : "Sent: Gomon wakes on it."); void load(); setTimeout(() => setNote(null), 4000); } else setNote(j.error ?? `Failed (${r.status})`);
+    if (r.ok) { setText(""); setAtt([]); setNote(speak ? "Queued: Gomon says it out loud in the meeting." : "Sent to Gomon."); void load(); setTimeout(() => setNote(null), 4000); } else setNote(j.error ?? `Failed (${r.status})`);
   }
 
   return (
@@ -74,11 +87,23 @@ export default function SessionChat({ callId, initialEntries, initialOps, initia
         <div className="ch-compose">
           <div className="ch-status" data-tone={p.tone}><span className="sb-led" /><b>{p.text}</b>{note && <span className="ch-note">{note}</span>}</div>
           <div className="ch-input">
+            {att.length > 0 && <div className="ch-att">{att.map((x, i) => <span key={i} className={`ch-chip k-${x.kind}`}>{x.kind === "memory" ? "◆" : "▤"} {x.label}<button onClick={() => setAtt(att.filter((_, j) => j !== i))} aria-label={`Remove ${x.label}`}>×</button></span>)}</div>}
             <textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
-              placeholder={mode === "prompt" ? "Message Gomon in this meeting…" : "Gomon says this out loud in the meeting…"} aria-label="Message" />
+              placeholder={speak ? "Gomon will say this out loud in the meeting…" : "Message Gomon about this meeting…"} aria-label="Message" />
             <div className="ch-tools">
-              <button className="ch-pill" aria-pressed={mode === "prompt"} onClick={() => setMode("prompt")}>Prompt</button>
-              <button className="ch-pill" aria-pressed={mode === "say"} onClick={() => setMode("say")}>Say in call</button>
+              <button className="ch-pill" onClick={() => fileIn.current?.click()} disabled={speak} title="Attach a text file (md, txt, json, csv, code)">＋ File</button>
+              <input ref={fileIn} type="file" hidden multiple accept=".md,.txt,.json,.csv,.ts,.tsx,.js,.py,.yaml,.yml,.log" onChange={(e) => { void addFiles(e.target.files); e.target.value = ""; }} />
+              <div className="ch-pick">
+                <button className="ch-pill" onClick={() => setPicker(!picker)} disabled={speak} aria-expanded={picker} title="Attach a team memory from the database">◆ From database</button>
+                {picker && (
+                  <div className="ch-pop">
+                    <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search memories: D-17, rate limit…" />
+                    <ul>{found.map((m) => <li key={m.id}><button onClick={() => { setAtt((a) => [...a, { kind: "memory", label: m.key ?? m.kind, body: `[${m.key ?? m.kind}] ${m.text}` }]); setPicker(false); setQ(""); }}><b className="mono">{m.key ?? m.kind}</b><span>{m.text}</span></button></li>)}
+                      {!found.length && <li className="muted small">No active memory matches.</li>}</ul>
+                  </div>
+                )}
+              </div>
+              <label className="ch-speak" title="Gomon reads your message out loud in the meeting instead of answering it"><input type="checkbox" checked={speak} onChange={(e) => setSpeak(e.target.checked)} /><span className="ch-sw"><i /></span>Speak in meeting</label>
               <button className="sb-send" disabled={busy || !text.trim()} onClick={send} aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg></button>
             </div>
           </div>

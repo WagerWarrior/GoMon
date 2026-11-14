@@ -62,7 +62,7 @@ export default async function MissionControlHome() {
 
       <section className="p-card">
         <div className="p-card-h"><h2>Latest</h2><span className="muted small">what Gomon just did, across sessions</span></div>
-        <Latest rows={feed} sessions={o.sessions} n={8} />
+        <Latest rows={feed} sessions={o.sessions} n={6} />
       </section>
 
       <section className="p-card p-flush">
