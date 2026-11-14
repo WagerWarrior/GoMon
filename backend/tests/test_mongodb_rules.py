@@ -125,3 +125,24 @@ def test_tamper_duplicate_effect_is_refused_by_unique_index(hx101):
     r = engine.tamper(inc["_id"], "duplicate_effect")
     assert r["refused"] is True and r["rule"].startswith("rule 3")
     assert db().sim_effects.count_documents({}) == 1
+
+
+@pytest.mark.parametrize("kind", ["refresh_without_approval", "close_without_evidence"])
+def test_tamper_is_refused_even_after_a_legitimate_close(hx101, kind):
+    """Regression: the demo tampers AFTER recovery. A payload that is valid in that state (e.g. state=resolved
+    again) is a no-op, not a test of the rules, and must never be reported as an accepted forbidden write."""
+    inc = _pending(hx101)
+    engine.handle_turn(inc["_id"], "v", "verify the refresh")
+    assert engine.get_incident(inc["_id"])["state"] == "resolved"
+    r = engine.tamper(inc["_id"], kind)
+    assert r["refused"] is True and r["code"] == 121
+    assert engine.get_incident(inc["_id"])["state"] == "resolved"
+    assert db().audit_events.count_documents({"kind": "tamper_ACCEPTED"}) == 0
+
+
+def test_tamper_that_would_be_legitimate_is_a_labeled_noop_not_an_accepted_hole(hx101):
+    inc = _pending(hx101)
+    engine.handle_turn(inc["_id"], "v", "verify the refresh")  # display now matches target
+    r = engine.tamper(inc["_id"], "close_on_ack_only")
+    assert r["refused"] is False and r.get("noop") is True
+    assert db().audit_events.count_documents({"kind": "tamper_ACCEPTED"}) == 0

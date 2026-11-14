@@ -307,16 +307,21 @@ def tamper(incident_id: str, kind: str) -> dict:
     inc = get_incident(incident_id)
     d = db()
     out = {"kind": kind, "attempt": TAMPERS[kind]}
+    noop = {**out, "refused": False, "noop": True}
     try:
         if kind == "refresh_without_approval":
-            d.incidents.update_one({"_id": incident_id}, {"$set": {
+            res = d.incidents.update_one({"_id": incident_id}, {"$set": {
                 "state": "refresh_pending", "approval": {"sourceVersion": inc["target"]["sourceVersion"]}}})  # no supervisor
-        elif kind == "close_without_evidence":
-            d.incidents.update_one({"_id": incident_id}, {"$set": {"state": "resolved"}})
+        elif kind == "close_without_evidence":  # invalid in every state: no verification at all
+            res = d.incidents.update_one({"_id": incident_id}, {"$set": {"state": "resolved"}, "$unset": {"verification": ""}})
         elif kind == "close_on_ack_only":
             disp = d.sim_display.find_one({"_id": inc["flightId"]})
+            if (disp["status"], disp["sourceVersion"], disp["sourceTime"]) == (
+                    inc["target"]["status"], inc["target"]["sourceVersion"], inc["target"]["sourceTime"]):
+                return {**noop, "note": "The display already matches the target, so closing on it would be legitimate. "
+                                        "Use an ACK-only display to see an acknowledged refresh that never applies."}
             sent = ((inc.get("command") or {}).get("sentAt")) or _dt(now_ms() - 5000)
-            d.incidents.update_one({"_id": incident_id}, {"$set": {
+            res = d.incidents.update_one({"_id": incident_id}, {"$set": {
                 "state": "resolved", "command.sentAt": sent,
                 "verification": {"observationId": "tamper", "flightId": disp["flightId"], "displayStatus": disp["status"],
                                  "displayVersion": disp["sourceVersion"], "displaySourceTime": disp["sourceTime"],
@@ -324,9 +329,12 @@ def tamper(incident_id: str, kind: str) -> dict:
         elif kind == "duplicate_effect":
             eff = d.sim_effects.find_one({"flightId": inc["flightId"]})
             if not eff:
-                return {**out, "refused": False, "note": "No command has been applied yet, so there is nothing to duplicate."}
+                return {**noop, "note": "No command has been applied yet, so there is nothing to duplicate."}
             d.sim_effects.insert_one({"commandId": eff["commandId"], "flightId": inc["flightId"], "applied": True,
                                       "at": now_ms(), "label": simulator.LABEL})
+            res = None
+        if res is not None and res.modified_count == 0:
+            return {**noop, "note": "MongoDB accepted it, but it changed nothing."}
     except (OperationFailure, DuplicateKeyError) as e:
         info = (e.details or {}).get("errInfo") if hasattr(e, "details") else None
         rule = "rule 3: unique index on commandId" if isinstance(e, DuplicateKeyError) else _failed_clause(e)

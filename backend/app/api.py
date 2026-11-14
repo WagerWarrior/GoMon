@@ -73,7 +73,7 @@ def view(iid: str):
         "commands": list(d.commands.find({"incidentId": iid}, {"_id": 0})),
         "audit": list(d.audit_events.find({"incidentId": iid}, {"_id": 0}).sort("at", 1)),
         "effects": list(d.sim_effects.find({"flightId": inc["flightId"]}, {"_id": 0})),
-        "simulator": {"source": d.sim_feed.find_one({"_id": inc["flightId"]}),
+        "simulator": {"feed": d.sim_feed.find_one({"_id": inc["flightId"]}),
                       "display": d.sim_display.find_one({"_id": inc["flightId"]})}})
 
 

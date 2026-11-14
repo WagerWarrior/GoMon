@@ -33,6 +33,24 @@ uv run uvicorn app.api:app --port 8000   # open http://localhost:8000
 ```
 Use **New (ACK-only display)** to see an acknowledged refresh that never applies: the incident cannot close.
 
+## MongoDB-enforced rules (`app/schema.py`, spec section 2)
+The `incidents` collection has a **validator**; the app and the model cannot talk their way past it:
+1. no `refresh_pending`/`verifying`/`resolved` without an approval naming a `supervisorId` for the target's `sourceVersion`
+2. no `resolved` without a `verification` (flight, status, version, source time all equal to the target) observed **after** `command.sentAt`
+3. unique index on `sim_effects.commandId` (one applied effect per command)
+
+`tests/test_mongodb_rules.py` fires writes straight at MongoDB (bypassing `engine.py`): each rule's rejections including
+missing-field and wrong-type cases, plus **positive controls** showing the same write is accepted when valid. The spec's
+validator sketch was marked untested; it has now run on MongoDB 8.0.4. Limits: it checks the stored record, not the real
+world, and sees the document after the write; ordering/concurrency come from revision-conditional updates.
+`POST /api/incidents/{id}/tamper` runs forbidden writes for the demo and returns MongoDB's own refusal.
+
+## Demo (`app/static/index.html`)
+Apple-style single page (system fonts/colors, translucent window, light/dark). **Play demo** runs the real flow against the
+real API: stale display -> reconnect (no replay) -> ask -> approve -> verified close -> a forbidden write that MongoDB refuses.
+Panels: flight boards, chat with route receipts, live incident document, "Try to break it", router decisions, audit trail,
+and a Learning tab (releases and evals). Voice is not built (the mic button is disabled and says so).
+
 ## Learning loop (increment 3) — `app/learning/`
 Offline, versioned, gated. Nothing is learned live. Data is derived from SIMULATED scenario families.
 
@@ -48,6 +66,7 @@ Labels: oracle from the spec's evidence table (`oracle.py`), never reasoner outp
 test set is evaluated it is renamed `burned_testN` and never trained or tuned on again; promote against a fresh one.
 
 ### Results so far (real runs; see `eval_reports` for the stored records)
+Note: renaming the routes to `*_REASONER` changed the artifact digest, so `linear-ff7e0528` was retrained as `linear-ef918fd8` with identical results (acc 0.704, 0/147 unsafe).
 Frozen test sets were consumed in this order. **No release has been promoted; the active router is still `bootstrap-v0`.**
 | Release | Frozen test | Result |
 |---|---|---|
