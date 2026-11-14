@@ -25,6 +25,11 @@
 - Speech policy (typed checks): conversational answers, grounded answers citing previous calls / GitHub `#14` / Atlas counts,
   "I don't have anything on that yet." when nothing covers it, medium conflicts silent. Details: `apps/worker/README.md`.
 - Dashboard live session, connectors filing GitHub issues and Slack posts on lock (issue #9 earlier).
+- **15:30 change: no tunnel.** Pinggy dropped mid-call (closed by its server after 2 min 46 s), which stopped transcription.
+  Ears are now ElevenLabs Scribe from `http://localhost:3001/ears?callId=…` on the laptop in the Meet (tab audio + mic),
+  wake word spelled right via `keyterms`. Recall only joins for voice and chat, both outbound.
+- Utterances are held by the worker that ingested them (`heldBy`), so stray workers can't split a call: verified while
+  Tamir's old worker was still running.
 
 ## Not yet seen live
 Consensus lock → GitHub + Slack from **spoken** agreement with two people; meeting-chat link delivery; voice correct/forget;

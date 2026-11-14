@@ -10,7 +10,8 @@ npm run setup               # collections + validators, TTL/unique indexes, memo
 npm run seed                # synthetic Northwind scenario (below); `-- --reset` wipes all call data, memories, outbox, audit, counters
 npm run verify              # live checks: hybrid retrieval, exact IDs, cross-team isolation, validator, TTL
 npm start                   # worker on :3001 (VOICE_OUT=recall npm start: the worker speaks into meetings itself)
-npm run join -- <meet_url> [callId] [title]       # send Gomon to a meeting (Recall bot, transcript webhook via PUBLIC_BASE_URL, voice via Output Audio)
+npm run join -- <meet_url> [callId] [title]       # send Gomon to a meeting (Recall bot; voice via Output Audio). Prints the ears URL
+# then open http://localhost:3001/ears?callId=<callId> in Chrome on the laptop in the meeting (share the Meet tab with audio)
 npm run say -- <callId> "<speaker>" "<text>"     # typed utterance (source "typed"), or `-- <callId> --script` to rehearse
 npm run inspect -- <callId>                       # dump what Gomon wrote for a call
 ```
@@ -107,6 +108,21 @@ engineer create denied and audited; lead create succeeded; a template `voiceId` 
 - Replies carry `replyKind`: `conversational` (about the call itself: "can you hear me"), `grounded` (must list `sources`; at
   least one must be in the provided context and every spoken key must be active, else replaced with "I don't have anything on
   that yet." and logged as `ungrounded_reply_dropped`), or `no_answer`.
+
+## Ears: ElevenLabs Scribe, no tunnel (`src/ears.ts`, `public/ears.html`)
+Free tunnels drop within minutes (Pinggy closed after 2 min 46 s mid-call), and Recall's transcript webhook needs one. The ears
+page runs on the laptop that's in the Meet: it captures the **Meet tab audio** (everyone remote, labeled with the "meeting"
+name) and the **mic** (you), resamples to 16 kHz, and streams each source to ElevenLabs Scribe realtime (`scribe_v3_live`,
+`commit_strategy=vad`, 0.7 s silence, `keyterms=Gomon` so the wake word is spelled right). Committed segments go to
+`POST /ears/utterance` (source `scribe`). Tokens come from `GET /ears/token` (single-use; the API key stays server-side).
+All `/ears` routes are loopback-only and skip `WORKER_TOKEN`. Measured: commit ~850 ms after speech ends.
+Echo guard: Gomon's own voice comes back through the Meet tab; a segment whose words are ≥60% contained in a line Gomon said
+in the last 30 s is dropped (`agent_events.kind = echo_dropped`). Use headphones so the mic doesn't hear the other side.
+
+## One call, one worker (`heldBy`)
+`postUtterance` inserts each utterance already held by the ingesting worker (`claimedAt` + `heldBy`). Other or older workers
+only claim docs without `claimedAt`, so a stray worker can't split a call's batches (verified while Tamir's old worker ran).
+Unprocessed holds older than 120 s are released by `catchUp` as before.
 
 ## Speech policy
 | Situation | Voice | Elsewhere |

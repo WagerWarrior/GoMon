@@ -1,8 +1,11 @@
 /**
  * Send Gomon into a meeting with voice through Recall Output Audio (no camera webpage, so no tunnel browser-warning page).
  *   npm run join -- <meeting_url> [callId] [title]
- * Needs: RECALL_API_KEY, PUBLIC_BASE_URL (tunnel to apps/bot-page, which relays Recall transcript webhooks to this worker),
- * RECALL_WEBHOOK_SECRET or RECALL_WEBHOOK_TOKEN, ELEVENLABS_API_KEY. Run the worker with VOICE_OUT=recall.
+ * Ears, pick one:
+ *  - no PUBLIC_BASE_URL (default): open http://localhost:3001/ears?callId=<callId> on the laptop in the meeting; it transcribes
+ *    the meeting tab + mic with ElevenLabs Scribe. No tunnel needed.
+ *  - PUBLIC_BASE_URL=https://<tunnel to apps/bot-page>: Recall transcript webhooks (needs a tunnel that stays up).
+ * Needs RECALL_API_KEY and ELEVENLABS_API_KEY. Run the worker with VOICE_OUT=recall.
  */
 import { randomUUID } from "node:crypto";
 import { config } from "../src/config.ts";
@@ -12,14 +15,21 @@ import { ttsMp3 } from "../src/voice.ts";
 
 const [meetingUrl, callIdArg, titleArg] = process.argv.slice(2);
 const { RECALL_API_KEY, RECALL_REGION = "us-west-2", PUBLIC_BASE_URL = "", RECALL_WEBHOOK_TOKEN = "", RECALL_WEBHOOK_SECRET = "" } = process.env;
-if (!meetingUrl || !RECALL_API_KEY || !/^https:\/\//.test(PUBLIC_BASE_URL)) {
-  console.error("usage: npm run join -- <meeting_url> [callId] [title]   (needs RECALL_API_KEY and an https PUBLIC_BASE_URL)");
+if (!meetingUrl || !RECALL_API_KEY) {
+  console.error("usage: npm run join -- <meeting_url> [callId] [title]   (needs RECALL_API_KEY)");
   process.exit(1);
 }
 const callId = callIdArg || `call-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}-${randomUUID().slice(0, 4)}`;
-const webhook = new URL(`${PUBLIC_BASE_URL.replace(/\/$/, "")}/recall/webhook/`);
-webhook.searchParams.set("callId", callId);
-if (!RECALL_WEBHOOK_SECRET && RECALL_WEBHOOK_TOKEN) webhook.searchParams.set("token", RECALL_WEBHOOK_TOKEN);
+let recordingConfig: Record<string, unknown> = {};
+if (/^https:\/\//.test(PUBLIC_BASE_URL)) {
+  const webhook = new URL(`${PUBLIC_BASE_URL.replace(/\/$/, "")}/recall/webhook/`);
+  webhook.searchParams.set("callId", callId);
+  if (!RECALL_WEBHOOK_SECRET && RECALL_WEBHOOK_TOKEN) webhook.searchParams.set("token", RECALL_WEBHOOK_TOKEN);
+  recordingConfig = {
+    transcript: { provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } } },
+    realtime_endpoints: [{ type: "webhook", url: webhook.toString(), events: ["transcript.data"] }],
+  };
+}
 
 // Output Audio requires automatic_audio_output; use it as Gomon's greeting.
 const greeting = await ttsMp3("Hey, Gomon here. I'll keep track of decisions. Say hey Gomon if you need me.");
@@ -30,10 +40,7 @@ const res = await fetch(`https://${RECALL_REGION}.recall.ai/api/v1/bot/`, {
     meeting_url: meetingUrl,
     bot_name: "Gomon",
     metadata: { callId },
-    recording_config: {
-      transcript: { provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } } },
-      realtime_endpoints: [{ type: "webhook", url: webhook.toString(), events: ["transcript.data"] }],
-    },
+    recording_config: recordingConfig,
     automatic_audio_output: { in_call_recording: { data: { kind: "mp3", b64_data: greeting.toString("base64") } } },
   }),
 });
@@ -55,5 +62,6 @@ await cols(db).calls.updateOne(
   { upsert: true },
 );
 await close();
-console.log(JSON.stringify({ callId, botId: bot.id, meetingUrl, dashboard: `http://localhost:3000/sessions/${callId}` }, null, 2));
-console.log("Admit 'Gomon' in the meeting when it asks to join.");
+const ears = recordingConfig.realtime_endpoints ? undefined : `http://localhost:${config.port}/ears?callId=${encodeURIComponent(callId)}`;
+console.log(JSON.stringify({ callId, botId: bot.id, meetingUrl, dashboard: `http://localhost:3000/sessions/${callId}`, ...(ears ? { ears } : {}) }, null, 2));
+console.log(ears ? `Admit 'Gomon' in the meeting, then open ${ears} in Chrome on this laptop and share the Meet tab with audio.` : "Admit 'Gomon' in the meeting when it asks to join.");

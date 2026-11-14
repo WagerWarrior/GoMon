@@ -40,14 +40,15 @@ Keys go in the repo-root `.env` (copy `.env.example`). Node 22+.
 ```bash
 cd apps/worker && npm install && npm run setup && npm run seed   # Atlas collections, indexes, synthetic Northwind memory
 VOICE_OUT=recall npm start                                       # agent worker on :3001, speaks through Recall
-cd apps/bot-page && WORKER_URL= UTTERANCE_API_URL=http://localhost:3001/api/utterances npm start   # webhook relay on :8787
 cd apps/web && npm install && npm run dev                        # workspace on :3000
 cd apps/connectors && npm install && npm start                   # GitHub + Slack outbox
-# expose :8787 publicly (any tunnel; webhooks only), then:
-cd apps/worker && PUBLIC_BASE_URL=https://<tunnel> npm run join -- https://meet.google.com/<code> my-call "Design review"
+cd apps/worker && npm run join -- https://meet.google.com/<code> my-call "Design review"
 ```
-Admit "Gomon" in Meet and open `http://localhost:3000/sessions/my-call`. Without a meeting: `npm run say -- my-call --script`
-(in `apps/worker`) replays the demo conversation as typed utterances.
+Admit "Gomon" in Meet, then open `http://localhost:3001/ears?callId=my-call` in Chrome on the same laptop and share the Meet tab
+with audio: it transcribes the meeting and your mic with ElevenLabs Scribe, so no public URL or tunnel is needed. Watch
+`http://localhost:3000/sessions/my-call`. (With a stable tunnel, Recall's own transcript webhook through `apps/bot-page` also
+works: set `PUBLIC_BASE_URL`.) Without a meeting: `npm run say -- my-call --script` in `apps/worker` replays the demo as typed
+utterances.
 
 | App | Owner | Docs |
 |---|---|---|

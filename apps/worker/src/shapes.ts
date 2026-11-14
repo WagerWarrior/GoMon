@@ -20,6 +20,8 @@ export type Utterance = {
   source: "recall" | "scribe" | "typed";
   startedAt?: Date; endedAt?: Date; receivedAt: Date;
   claimedAt?: Date; claimToken?: string; claimedBy?: string; processedAt?: Date; error?: string;
+  /** Worker that ingested it and holds it (claimedAt set at insert), so other or older workers never split a call's batches. */
+  heldBy?: string;
 };
 
 export type CallItem = {

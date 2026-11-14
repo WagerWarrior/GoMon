@@ -26,6 +26,7 @@ import { createBot, leaveBot } from "./recall.ts";
 import { createProjectWithBoard } from "./projects.ts";
 import { COMPANY_PROJECT } from "./scope.ts";
 import { startAnnouncer } from "./announce.ts";
+import { handleEars } from "./ears.ts";
 
 const { client, db } = await connect();
 const c = cols(db);
@@ -67,7 +68,8 @@ function schedule(callId: string): void {
  * (MERGE_QUIET_MS since the newest segment, at most MERGE_MAX_MS since the oldest) and analyze the merged run once.
  */
 async function processPending(callId: string): Promise<boolean> {
-  const pendingFilter = { callId, processedAt: { $exists: false }, claimedAt: { $exists: false } };
+  // Unclaimed, or held for this worker since ingest (postUtterance). Held docs look claimed to any other worker.
+  const pendingFilter = { callId, processedAt: { $exists: false }, claimToken: { $exists: false }, $or: [{ claimedAt: { $exists: false } }, { heldBy: WORKER_ID }] };
   for (;;) {
     const pending = await c.utterances.find(pendingFilter, { projection: { text: 1, receivedAt: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray();
     if (!pending.length) return false;
@@ -81,7 +83,7 @@ async function processPending(callId: string): Promise<boolean> {
   const ids = (await c.utterances.find(pendingFilter, { projection: { _id: 1 } }).sort({ seq: 1 }).limit(MAX_BATCH).toArray()).map((d) => d._id);
   if (!ids.length) return false;
   const claimToken = randomUUID();
-  await c.utterances.updateMany({ _id: { $in: ids }, processedAt: { $exists: false }, claimedAt: { $exists: false } }, { $set: { claimedAt: new Date(), claimToken, claimedBy: WORKER_ID } });
+  await c.utterances.updateMany({ _id: { $in: ids }, ...pendingFilter }, { $set: { claimedAt: new Date(), claimToken, claimedBy: WORKER_ID } });
   const batch = (await c.utterances.find({ claimToken }).sort({ seq: 1 }).toArray()) as Stored[];
   if (!batch.length) return true;
   try {
@@ -182,6 +184,8 @@ async function postUtterance(b: Record<string, unknown>) {
   const doc: Utterance = {
     callId, teamId: config.teamId, projectId, seq, sourceKey,
     speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
+    // Held by the ingesting worker: a stray or older worker sees it as claimed (they skip claimedAt) and never splits the call.
+    claimedAt: new Date(), heldBy: WORKER_ID,
     ...(str(b.startedAt) ? { startedAt: new Date(String(b.startedAt)) } : {}), ...(str(b.endedAt) ? { endedAt: new Date(String(b.endedAt)) } : {}),
   };
   try {
@@ -351,6 +355,8 @@ const server = createServer(async (req, res) => {
   res.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, OPTIONS");
   if (req.method === "OPTIONS") return void res.writeHead(204).end();
   const url = new URL(req.url ?? "/", "http://localhost");
+  // Local capture page (ElevenLabs Scribe): loopback-only, so it runs before the WORKER_TOKEN check.
+  if (await handleEars(req, res, url, c, postUtterance).catch((e) => { console.error("[ears]", e); send(res, 500, { error: "ears failed" }); return true; })) return;
   if (config.workerToken) {
     const token = req.headers.authorization?.replace(/^Bearer /, "") ?? url.searchParams.get("token");
     if (token !== config.workerToken && url.pathname !== "/healthz") return send(res, 401, { error: "unauthorized" });
