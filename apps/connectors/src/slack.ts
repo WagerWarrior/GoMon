@@ -11,7 +11,11 @@ async function api(env: Env, method: string, body: Record<string, unknown>, muta
   const { token, base } = cfg(env);
   let res: Response;
   try {
-    res = await fetch(`${base}/${method}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
+    // Slack accepts JSON bodies only on write methods; read methods (conversations.*) need form encoding.
+    const form = method.startsWith("conversations.");
+    const payload = form ? new URLSearchParams(Object.entries(body).map(([k, v]) => [k, String(v)])).toString() : JSON.stringify(body);
+    const type = form ? "application/x-www-form-urlencoded" : "application/json; charset=utf-8";
+    res = await fetch(`${base}/${method}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": type }, body: payload, signal: AbortSignal.timeout(10000) });
   } catch (e: any) { throw new Retryable(`network error: ${e?.message ?? e}`, mutating); }
   if (res.status === 429) throw new Retryable("slack rate limited", false, (Number(res.headers.get("retry-after")) || 30) * 1000);
   if (res.status >= 500) throw new Retryable(`slack HTTP ${res.status}`, mutating);

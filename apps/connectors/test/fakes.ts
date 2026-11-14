@@ -49,7 +49,10 @@ export function fakeSlack() {
   const srv = http.createServer((req, res) => {
     let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
       const send = (j: Json, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(j)); };
-      const j = body ? JSON.parse(body) : {}; const method = req.url!.split("/").pop();
+      const method = req.url!.split("/").pop()!; const form = String(req.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded");
+      // Like real Slack: read methods (conversations.*) ignore JSON bodies and need form encoding.
+      if (method.startsWith("conversations.") && !form) return send({ ok: false, error: "invalid_arguments" });
+      const j: Json = form ? Object.fromEntries(new URLSearchParams(body)) : body ? JSON.parse(body) : {};
       if (s.error) return send({ ok: false, error: s.error });
       if (s.hideReads && method!.startsWith("conversations.")) return send({ ok: false, error: "not_in_channel" });
       if (method === "chat.postMessage") {
