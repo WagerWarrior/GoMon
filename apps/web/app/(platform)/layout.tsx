@@ -1,5 +1,6 @@
 import "./platform.css";
 import Sidebar from "@/components/platform/Sidebar";
+import AskDock from "@/components/platform/AskDock";
 import { cached, db, scope } from "@/lib/db";
 import { sessions } from "@/lib/platform";
 export const dynamic = "force-dynamic";
@@ -18,6 +19,7 @@ export default async function PlatformLayout({ children }: { children: React.Rea
     <div className="p-app">
       <Sidebar team={team} live={live} />
       <main className="p-main">{children}</main>
+      <AskDock />
     </div>
   );
 }

@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { collection } from "@/lib/platform";
 import { USED_BY } from "@/lib/dbmap";
+import DocTable from "@/components/platform/DocTable";
 export const dynamic = "force-dynamic";
 
 export default async function CollectionPage({ params }: { params: Promise<{ name: string }> }) {
   const name = decodeURIComponent((await params).name);
   const c = await collection(name); const u = USED_BY[name];
   const cols = c.fields.filter((f: any) => f.name !== "_id" && f.presence >= 50).slice(0, 6).map((f: any) => f.name);
-  const show = (v: unknown) => { if (v == null) return "—"; const s = typeof v === "object" ? JSON.stringify(v) : String(v); return s.length > 90 ? s.slice(0, 89) + "…" : s; };
   return (
     <>
       <header className="p-head">
@@ -33,21 +33,18 @@ export default async function CollectionPage({ params }: { params: Promise<{ nam
         <div className="p-card p-flush">
           <div className="p-card-h mx-pad"><h2>Fields</h2><span className="muted small">latest 200 documents</span></div>
           <table className="p-table"><thead><tr><th>Field</th><th>Type</th><th className="num">Present</th></tr></thead>
-            <tbody>{c.fields.map((f: any) => <tr key={f.name}><td className="mono">{f.name}</td><td className="small muted">{f.types.join(" | ")}</td><td className="num">{f.presence}%</td></tr>)}</tbody></table>
+            <tbody>{c.fields.slice(0, 10).map((f: any) => <Field key={f.name} f={f} />)}</tbody></table>
+          {c.fields.length > 10 && <details className="db-more"><summary>Show all {c.fields.length} fields</summary><table className="p-table"><tbody>{c.fields.slice(10).map((f: any) => <Field key={f.name} f={f} />)}</tbody></table></details>}
         </div>
       </section>
       <section className="p-card p-flush">
-        <div className="p-card-h mx-pad"><h2>Latest documents</h2></div>
-        <table className="p-table">
-          <thead><tr><th>_id</th>{cols.map((k: string) => <th key={k}>{k}</th>)}<th></th></tr></thead>
-          <tbody>{c.docs.map((d: any) => (
-            <tr key={String(d._id)}>
-              <td className="mono small">{show(d._id)}</td>{cols.map((k: string) => <td key={k} className="small">{show(d[k])}</td>)}
-              <td><details className="db-json"><summary>JSON</summary><pre>{JSON.stringify(d, null, 2)}</pre></details></td>
-            </tr>
-          ))}</tbody>
-        </table>
+        <div className="p-card-h mx-pad"><h2>Latest documents</h2><span className="muted small">click a row to preview</span></div>
+        <DocTable name={name} docs={c.docs} cols={cols} />
       </section>
     </>
   );
+}
+
+function Field({ f }: { f: any }) {
+  return <tr><td className="mono">{f.name}</td><td className="small muted">{f.types.join(" | ")}</td><td className="num"><span className="db-bar"><i style={{ width: `${f.presence}%` }} /></span>{f.presence}%</td></tr>;
 }
