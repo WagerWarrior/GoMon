@@ -11,6 +11,8 @@ import { CategoryPicker, ModePicker } from "@/components/platform/SessionBar";
 import { templates } from "@/lib/templates";
 import AutoRefresh from "@/components/platform/AutoRefresh";
 import RecapCard from "@/components/platform/RecapCard";
+import Listen from "@/components/platform/Listen";
+import Workspace from "@/components/Workspace";
 import { recapOf } from "@/lib/recap";
 import { bursts, collapse } from "@/lib/group";
 import { clock, dur, when } from "@/lib/format";
@@ -20,7 +22,7 @@ export const dynamic = "force-dynamic";
 export default async function SessionPage({ params, searchParams }: { params: Promise<{ callId: string }>; searchParams: Promise<{ tab?: string }> }) {
   const { callId: raw } = await params; const callId = decodeURIComponent(raw);
   const asked = (await searchParams).tab ?? "live";
-  const tab = ["activity", "events", "decisions", "timings"].includes(asked) ? "activity" : "live";
+  const tab = asked === "board" ? "board" : ["activity", "events", "decisions", "timings"].includes(asked) ? "activity" : "live";
   const [s, list, m, tpl] = await Promise.all([session(callId), sessions(), mission(callId), templates()]);
   const meta = list.find((x) => x.id === callId);
   if (!s.call) notFound();
@@ -37,12 +39,16 @@ export default async function SessionPage({ params, searchParams }: { params: Pr
         </div>
         <ModePicker callId={callId} current={s.call.templateId ?? "design-review"} options={tpl.rows.map((t: any) => ({ id: t._id, name: t.name }))} />
         <CategoryPicker callId={callId} current={meta?.category ?? "Design review"} />
-        <nav className="ss-tabs"><Link href={href("live")} aria-current={tab === "live" ? "page" : undefined}>Live</Link><Link href={href("activity")} aria-current={tab === "activity" ? "page" : undefined}>Activity</Link></nav>
+        {!ended && <Listen callId={callId} defaultMe="Robert Reder" defaultRemote="Max Naidenov" />}
+        <nav className="ss-tabs"><Link href={href("live")} aria-current={tab === "live" ? "page" : undefined}>Live</Link><Link href={href("board")} aria-current={tab === "board" ? "page" : undefined}>Board</Link><Link href={href("activity")} aria-current={tab === "activity" ? "page" : undefined}>Activity</Link></nav>
       </header>
       {tab === "live" && rv?.recap && <RecapCard v={rv} ended strip />}
       {tab === "live"
         ? <SessionChat callId={callId} initialEntries={buildTimeline(s).slice(-400)} initialOps={m.ops} initialContext={m.context} />
-        : <>{rv && <RecapCard v={rv} ended />}<SessionActivity callId={callId} s={s} /></>}
+        : tab === "board"
+          // Shared board: architecture diagram from active decisions, live items/conflicts/actions (SSE from Atlas).
+          ? <Workspace callId={callId} />
+          : <>{rv && <RecapCard v={rv} ended />}<SessionActivity callId={callId} s={s} /></>}
     </div>
   );
 }
