@@ -63,6 +63,17 @@ LLM: `LLM_PROVIDER=anthropic`, `LLM_API_KEY` in `.env.example`, default model `c
 Gomon posts to #agent-drop (Max, Nov 14; any worker with an old SLACK_CHANNEL_ID must pull and restart). Two connector workers on `gomon` are safe together (atomic claim, each action sent once), and a worker only claims action types it has config for (no `GITHUB_TOKEN` = it never touches `create_issue`), so a half-configured worker cannot fail another's send. Live: D-16 on call `workflow-test-1` -> #agent-drop thread + GitHub issue #10.
 The Gomon app icon in Slack is the leaf face (`design/gomon/gomon-icon.png`, rebuilt by `node design/gomon/icon.mjs` + headless Chrome).
 
+## For Rob: "only activate on hey Gomon" (Max, Nov 14)
+Decision: passive capture keeps running without the wake word; the wake word gates everything Gomon SAYS.
+Capture is the governed record (call items, conflicts, consensus, memory, the dashboard); gating it would leave the
+workspace empty and break Statement Two. The mode already exists: template `silent-scribe` (proactivity `quiet` =
+0 spoken conflicts, no suggestions; consensus `explicit_only` = no spoken "Locking in" announcement). Asks for Rob:
+1. Make `silent-scribe` the default (`DEFAULT_TEMPLATE_ID`), or let Max pick it per session on the Templates page.
+2. Context memory: the agent's window is fixed (8 recent turns, 20 open items, top 6 memories, max_tokens 2048). Max wants
+   a "nice context memory system": suggest per-template limits plus a rolling call summary stored on `calls`
+   (refreshed every N turns) so the model sees the whole call, not the last 8 lines. The web UI already shows each run's
+   recalled memories, latencies and decision, so whatever you store there will be visible.
+
 ## Still open
 1. Per-call sample database vs main brain: not in the repo; everything uses `gomon` today. If Rob splits it,
    tell us which database the workspace reads and how promotion crosses (it cannot share one transaction).
