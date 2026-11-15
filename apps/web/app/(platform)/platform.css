@@ -844,6 +844,7 @@
 .ls-names{display:inline-flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}
 .ls-names input{width:104px;min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;padding:1px 2px;margin-right:6px;font:inherit;color:#0a0a0a;text-overflow:ellipsis}
 .ls-names input:focus{outline:0;border-bottom-color:#0a0a0a}
+.ls-incall{font-size:12px;color:#5b605c;overflow:hidden;text-overflow:ellipsis;max-width:220px}
 .ls-meters{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .ls-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#8c959f}
 .ls-live{background:#1a7f37}.ls-err{background:#cf222e}

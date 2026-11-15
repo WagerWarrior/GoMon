@@ -37,6 +37,16 @@ export default function Listen({ callId, defaultMe, defaultRemote }: { callId: s
   const [remote, setRemote] = useState(defaultRemote);
   const [status, setStatus] = useState<Record<Channel, Status>>({ meeting: { text: "off", tone: "off" }, mic: { text: "off", tone: "off" } });
   const [last, setLast] = useState("");
+  // Names to pick from: who is in the Meet now (Recall join events, when the events tunnel is up), then the team.
+  const [people, setPeople] = useState<{ inCall: string[] | null; choices: string[] }>({ inCall: null, choices: [] });
+  useEffect(() => {
+    if (running) return;
+    let live = true;
+    const load = () => void fetch(`/api/sessions/${encodeURIComponent(callId)}/people`).then((r) => (r.ok ? r.json() : null)).then((p) => { if (live && p) setPeople(p); }).catch(() => {});
+    load();
+    const t = setInterval(load, 5000);
+    return () => { live = false; clearInterval(t); };
+  }, [callId, running]);
   const ctxRef = useRef<AudioContext | null>(null);
   const entries = useRef<Entry[]>([]);
   const names = useRef({ me, remote });
@@ -152,7 +162,11 @@ export default function Listen({ callId, defaultMe, defaultRemote }: { callId: s
       {running ? (
         <span className="ls-meters">{dot(status.meeting)}meeting {status.meeting.text} {dot(status.mic)}you {status.mic.text}</span>
       ) : (
-        <span className="ls-names">you <input aria-label="Your name in the transcript" value={me} onChange={(e) => setMe(e.target.value)} /> others <input aria-label="Name for everyone else in the meeting" value={remote} onChange={(e) => setRemote(e.target.value)} /></span>
+        <span className="ls-names" title={people.inCall ? `In the Meet now: ${people.inCall.join(", ") || "nobody yet"}` : undefined}>
+          you <input aria-label="Your name in the transcript" list="ls-people" value={me} onChange={(e) => setMe(e.target.value)} /> others <input aria-label="Name for everyone else in the meeting" list="ls-people" value={remote} onChange={(e) => setRemote(e.target.value)} />
+          <datalist id="ls-people">{people.choices.map((n) => <option key={n} value={n}>{people.inCall?.includes(n) ? "in the Meet now" : ""}</option>)}</datalist>
+          {people.inCall && <span className="ls-incall">{people.inCall.length ? `in call: ${people.inCall.join(", ")}` : "nobody in the Meet yet"}</span>}
+        </span>
       )}
       {last && <span className="ls-last" title={last}>{last}</span>}
     </div>
