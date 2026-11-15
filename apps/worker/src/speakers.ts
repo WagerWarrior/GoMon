@@ -18,13 +18,17 @@ const MS_PER_WORD = 330;
 const SLACK_MS = 700;
 const MIN_OVERLAP_MS = 300;
 
+/** When a segment committed at `endedAt` with `words` words was probably said (ms epoch), with slack on both sides. Pure. */
+export function segmentWindow(endedAt: number, words: number): { from: number; to: number } {
+  return { from: endedAt - COMMIT_LAG_MS - Math.max(1, words) * MS_PER_WORD - SLACK_MS, to: endedAt - COMMIT_LAG_MS + SLACK_MS };
+}
+
 /**
  * Who held the floor while a segment was spoken. `endedAt` is when the segment was committed (ms epoch), `words` its length.
  * The person with the most speaking time inside the segment's estimated window wins; null when nobody clearly does.
  */
 export function speakerFor(spans: Span[], endedAt: number, words: number, skip: string[] = []): string | null {
-  const to = endedAt - COMMIT_LAG_MS + SLACK_MS;
-  const from = endedAt - COMMIT_LAG_MS - Math.max(1, words) * MS_PER_WORD - SLACK_MS;
+  const { from, to } = segmentWindow(endedAt, words);
   const time = new Map<string, number>();
   for (const s of spans) {
     if (skip.includes(s.name)) continue;

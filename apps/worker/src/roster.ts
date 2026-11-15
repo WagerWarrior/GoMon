@@ -11,7 +11,7 @@ import { config } from "./config.ts";
 import { postToMeetingChat } from "./links.ts";
 import type { Ctx } from "./governance.ts";
 import { loadPeople, resolvePerson, type Person } from "./people.ts";
-import { speakerFor, type Span } from "./speakers.ts";
+import { segmentWindow, speakerFor, type Span } from "./speakers.ts";
 
 export type RosterEvent = { kind: "join" | "leave" | "speech_on" | "speech_off"; id: string; name: string; botId: string | null; at: number };
 const KINDS: Record<string, RosterEvent["kind"]> = {
@@ -72,8 +72,23 @@ const timelines = new Map<string, SpeechTimeline>();
  */
 export function liveSpeaker(callId: string, endedAt: number, words: number): string | null {
   const t = timelines.get(callId);
-  if (!t || t.empty) return null;
-  return speakerFor(t.spans(endedAt), endedAt, words);
+  return t ? liveSpeakerFrom(t, endedAt, words) : null;
+}
+
+/** The active speaker switching this often inside one line's window is crosstalk, not turn-taking. */
+const FLIPS_MAX = 3;
+/**
+ * `liveSpeaker` on one timeline. Live, Nov 15: with two devices in one room Meet's speaker flipped every ~0.3 s; naming
+ * anyone from that would be a coin toss, so a window with more than FLIPS_MAX switches names nobody. Pure.
+ */
+export function liveSpeakerFrom(t: SpeechTimeline, endedAt: number, words: number): string | null {
+  if (t.empty) return null;
+  const spans = t.spans(endedAt);
+  const { from, to } = segmentWindow(endedAt, words);
+  const inside = spans.filter((s) => s.end > from && s.start < to).sort((a, b) => a.start - b.start);
+  const flips = inside.reduce((n, s, i) => n + (i > 0 && s.name !== inside[i - 1].name ? 1 : 0), 0);
+  if (flips > FLIPS_MAX) return null;
+  return speakerFor(spans, endedAt, words);
 }
 
 /** The transcript label: the live speaker when Meet says who it was, keeping what the listener heard it as. Pure. */
