@@ -20,6 +20,11 @@ export type PlatformView = {
 };
 
 const repo = () => process.env.GITHUB_REPO || "WagerWarrior/MongoDB";
+
+/** What Gomon made outside Atlas (issues, posts, notes). A filing a demo reset reverted is gone, not "already filed". Pure. */
+export function filedTicketsQuery(teamId: string) {
+  return { teamId, externalId: { $type: "string" }, reverted: { $ne: true } };
+}
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : null);
 
 export async function loadPlatform(c: Cols, teamId: string, callId: string): Promise<PlatformView> {
@@ -30,7 +35,7 @@ export async function loadPlatform(c: Cols, teamId: string, callId: string): Pro
     c.members.find({ teamId }).toArray(),
     c.projects.find({ teamId }).toArray(),
     c.memories.find({ teamId, status: "active", key: { $type: "string" } }).project({ key: 1, kind: 1, projectId: 1, version: 1, text: 1 }).toArray(),
-    c.actions.find({ teamId, externalId: { $type: "string" } }).sort({ createdAt: -1 }).limit(15).toArray(),
+    c.actions.find(filedTicketsQuery(teamId)).sort({ createdAt: -1 }).limit(15).toArray(),
     Promise.all(Object.entries(counted).map(async ([name, col]) => [name, await col.estimatedDocumentCount().catch(() => 0)] as const)),
   ]);
   // One person per GitHub login (seed has "Rob" and "Robert Reder" as two rows).

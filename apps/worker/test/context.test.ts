@@ -49,3 +49,11 @@ test("an issue line gives the assignee's name when the login is known", () => {
   assert.match(issueLine({ ...base, assignees: [{ login: "Roppax" }] }, NAMES).line, /assigned to Robert Reder\)$/);
   assert.match(issueLine({ ...base, assignees: [{ login: "stranger" }] }, NAMES).line, /assigned to stranger\)$/);
 });
+
+test("a filing a demo reset reverted is not listed as a filed ticket (K-05 still 'had issue 34' after the reset)", async () => {
+  const { filedTicketsQuery } = await import("../src/platform.ts");
+  const q = filedTicketsQuery("team-1");
+  assert.equal(q.teamId, "team-1");
+  assert.deepEqual(q.externalId, { $type: "string" });
+  assert.deepEqual(q.reverted, { $ne: true });
+});
