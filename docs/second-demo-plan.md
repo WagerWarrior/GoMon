@@ -20,6 +20,8 @@ script runs start to finish without a stumble.
 | 4 | Read-only rehearsal: `npm run ask -- --demo` | done, 390fc64 | all five answers correct |
 | 5 | Who is in the Meet, live: Recall `participant_events.join` / `.leave` to the worker's events server (127.0.0.1:3011, roster.ts) through `npm run tunnel`; `calls.liveParticipants`; a roll call in the chat; the listener's dropdown and "who is in this call?" read from it. If Recall refuses the events request, the bot is sent again without it | built: 26ce3eb, 42a41ee, and the join fallback | Recall-shaped events through the public tunnel (wrong token 401, worker API 404, joins/leave right, one roll call, answer right, listener updates in 6 s). Live, Nov 15 (call-202611150020-41d4): Recall's real join event arrived, roll call "Gomon here. In this call: Max Naidenov." sent to the Meet chat 5 s after Gomon entered |
 
+| 6 | Live speaker labels: the bot also gets `speech_on`/`speech_off`; each listener line goes to whoever Meet says was talking (`speakerFor`), keeping `speaker.heardAs`; Meet names resolve to the team's full names ("Robert" -> Robert Reder); one entry per person across re-sent bots | built: 88daa12, 2f4fd6e | Through the tunnel on test-speech-2265: Robert's line labeled Robert Reder (heard as Max Naidenov), a line with nobody talking kept its label, double join listed once, leave removed him. Not yet seen: real speech events from a Meet |
+
 ## Slice 5: how it runs
 
 Start `npm run tunnel` in `apps/worker` before sending Gomon in; each bot reads the tunnel's URL from `.local/tunnel-url`
