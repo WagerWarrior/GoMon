@@ -33,8 +33,11 @@ import { fastReply, wantsFastReply } from "./fast.ts";
 import { releaseHeld, routeAsk, nameOnly, offeredAction, trailingAsk, spokenKeys, TRAIL_MS } from "./hold.ts";
 import { sweepSpeakers } from "./speakers.ts";
 import { watchChatRequests } from "./chat-requests.ts";
+import { surviveNetworkDrops } from "./survive.ts";
 
 const { client, db } = await connect();
+// After the first connect: a worker that cannot reach Atlas at start still exits; a drop later is ridden out.
+surviveNetworkDrops();
 const c = cols(db);
 /** Base context; `projectId` here is only the fallback for calls without one. Per-call work uses callCtx(). */
 const ctx: Ctx = { client, c, teamId: config.teamId, projectId: config.projectId };
