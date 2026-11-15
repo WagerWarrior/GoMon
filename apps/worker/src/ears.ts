@@ -10,6 +10,7 @@
  */
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { labelLine, liveSpeaker } from "./roster.ts";
 import { randomUUID } from "node:crypto";
 import type { Cols } from "./db.ts";
 import { config } from "./config.ts";
@@ -126,7 +127,9 @@ export async function handleEars(req: IncomingMessage, res: ServerResponse, url:
       return true;
     }
     if (await isDuplicate(c, callId, text)) { send(res, 200, { dropped: "duplicate" }); return true; }
-    const r = await postUtterance({ callId, text, speaker: { displayName: b.speaker }, source: "scribe", sourceKey: `scribe:${String(b.channel ?? "mic")}:${randomUUID()}` });
+    // Meet's speech events (when the events tunnel is up) say who was talking: the line gets that name, not the field's.
+    const speaker = labelLine(typeof b.speaker === "string" ? b.speaker : "", liveSpeaker(callId, Date.now(), text.split(/\s+/).length));
+    const r = await postUtterance({ callId, text, speaker, source: "scribe", sourceKey: `scribe:${String(b.channel ?? "mic")}:${randomUUID()}` });
     send(res, r.status, r.data);
     return true;
   }

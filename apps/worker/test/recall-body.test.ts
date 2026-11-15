@@ -16,7 +16,7 @@ test("events tunnel: Recall sends join and leave events to it, with the call and
   const b = botRequestBody("https://meet.google.com/abc-defg-hij", "call-1", { ...rc, eventsUrl: "https://quiet-river.trycloudflare.com" }, media) as Body;
   const ep = b.recording_config?.realtime_endpoints;
   assert.equal(ep?.length, 1);
-  assert.deepEqual(ep![0].events, ["participant_events.join", "participant_events.leave"]);
+  assert.deepEqual(ep![0].events, ["participant_events.join", "participant_events.leave", "participant_events.speech_on", "participant_events.speech_off"]);
   const u = new URL(ep![0].url);
   // Recall needs the "/" before the query string (HTTP 400 otherwise).
   assert.equal(u.origin + u.pathname, "https://quiet-river.trycloudflare.com/recall/events/");

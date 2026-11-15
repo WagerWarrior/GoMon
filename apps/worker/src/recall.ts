@@ -29,7 +29,7 @@ export function botRequestBody(meetingUrl: string, callId: string, rc: RecallCon
       meeting_url: meetingUrl,
       bot_name: "Gomon",
       metadata: { callId },
-      ...(events ? { recording_config: { realtime_endpoints: [{ type: "webhook", url: events.toString(), events: ["participant_events.join", "participant_events.leave"] }] } } : {}),
+      ...(events ? { recording_config: { realtime_endpoints: [{ type: "webhook", url: events.toString(), events: ["participant_events.join", "participant_events.leave", "participant_events.speech_on", "participant_events.speech_off"] }] } } : {}),
       // Output Audio needs automatic_audio_output configured; the greeting doubles as it.
       automatic_audio_output: { in_call_recording: { data: { kind: "mp3", b64_data: media.greetingMp3B64 } } },
       automatic_video_output: { in_call_recording: card, in_call_not_recording: card },

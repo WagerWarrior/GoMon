@@ -15,7 +15,8 @@ export type Utterance = {
   seq: number;
   /** Producer-side dedup key (Recall transcript segment id, or a client-generated id). Unique per call. */
   sourceKey: string;
-  speaker: { displayName: string };
+  /** heardAs: the listener's label when Meet's speech events named someone else (roster.ts) or the call was relabeled. */
+  speaker: { displayName: string; heardAs?: string };
   text: string;
   source: "recall" | "scribe" | "typed";
   startedAt?: Date; endedAt?: Date; receivedAt: Date;

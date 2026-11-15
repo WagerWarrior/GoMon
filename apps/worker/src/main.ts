@@ -224,7 +224,7 @@ async function postUtterance(b: Record<string, unknown>) {
   const fast = !route.hold && !duplicateName && !offer && wantsFastReply(followUp ? `Gomon, ${bare}` : asked);
   const doc: Utterance = {
     callId, teamId: config.teamId, projectId, seq, sourceKey,
-    speaker: { displayName: speakerName }, text, source, receivedAt: new Date(),
+    speaker: { displayName: speakerName, ...(str((b.speaker as Record<string, unknown> | undefined)?.heardAs) ? { heardAs: str((b.speaker as Record<string, unknown>).heardAs) } : {}) }, text, source, receivedAt: new Date(),
     // Held by the ingesting worker: a stray or older worker sees it as claimed (they skip claimedAt) and never splits the call.
     claimedAt: new Date(), heldBy: WORKER_ID,
     // A held fragment is marked like a fast-lane line, so the batch analysis does not answer it either.
