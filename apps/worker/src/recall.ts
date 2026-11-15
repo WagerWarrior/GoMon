@@ -5,6 +5,8 @@
  *  - PUBLIC_BASE_URL set: transcripts stream to the bot page's webhook and the bot page is the bot's camera (needs a tunnel
  *    without a browser warning page).
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.ts";
 import { cardB64 } from "./card.ts";
 import { ttsMp3 } from "./voice.ts";
@@ -19,10 +21,15 @@ export function botRequestBody(meetingUrl: string, callId: string, rc: RecallCon
   if (!/^https:\/\//.test(rc.publicBaseUrl)) {
     if (!media) throw new Error("no PUBLIC_BASE_URL: pass the greeting and card (no-tunnel mode)");
     const card = { kind: "jpeg", b64_data: media.cardJpegB64 };
+    // Who is in the call: Recall posts join/leave events to the events tunnel (roster.ts), when one is up.
+    const events = /^https:\/\//.test(rc.eventsUrl) && rc.webhookToken ? new URL(`${rc.eventsUrl.replace(/\/$/, "")}/recall/events/`) : null;
+    events?.searchParams.set("callId", callId);
+    events?.searchParams.set("token", rc.webhookToken);
     return {
       meeting_url: meetingUrl,
       bot_name: "Gomon",
       metadata: { callId },
+      ...(events ? { recording_config: { realtime_endpoints: [{ type: "webhook", url: events.toString(), events: ["participant_events.join", "participant_events.leave"] }] } } : {}),
       // Output Audio needs automatic_audio_output configured; the greeting doubles as it.
       automatic_audio_output: { in_call_recording: { data: { kind: "mp3", b64_data: media.greetingMp3B64 } } },
       automatic_video_output: { in_call_recording: card, in_call_not_recording: card },
@@ -61,12 +68,18 @@ async function recall(path: string, init: { method: "POST"; body?: unknown }, rc
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
+/** The events tunnel's URL, written by `npm run tunnel` while it runs (read per bot: each tunnel run has a new URL). */
+export const TUNNEL_FILE = fileURLToPath(new URL("../../../.local/tunnel-url", import.meta.url));
+function tunnelUrl(): string {
+  try { return readFileSync(TUNNEL_FILE, "utf8").trim(); } catch { return ""; }
+}
+
 /** Send a Gomon bot into the meeting; returns Recall's bot id. */
 export async function createBot(meetingUrl: string, callId: string, rc: RecallConfig = config.recall): Promise<string> {
   const media = /^https:\/\//.test(rc.publicBaseUrl)
     ? undefined
     : { greetingMp3B64: (await ttsMp3(GREETING)).toString("base64"), cardJpegB64: cardB64("listening") };
-  const bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, rc, media) }, rc);
+  const bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, { ...rc, eventsUrl: rc.eventsUrl || tunnelUrl() }, media) }, rc);
   if (typeof bot.id !== "string") throw new Error("Recall returned no bot id");
   return bot.id;
 }

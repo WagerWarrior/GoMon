@@ -35,6 +35,8 @@ export const config = {
     webhookToken: process.env.RECALL_WEBHOOK_TOKEN || "",
     webhookSecret: process.env.RECALL_WEBHOOK_SECRET || "",
     botVariant: process.env.RECALL_BOT_VARIANT || "web_4_core",
+    /** Public https URL that reaches the events server (roster.ts), for who is in the call. Empty: `npm run tunnel` writes it. */
+    eventsUrl: process.env.RECALL_EVENTS_URL || "",
   },
 };
 

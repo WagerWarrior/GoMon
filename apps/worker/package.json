@@ -18,7 +18,8 @@
     "ask": "node --env-file=../../.env --import tsx scripts/ask.ts",
     "participants": "node --env-file=../../.env --import tsx scripts/participants.ts",
     "seed:fraud": "node --env-file=../../.env --import tsx scripts/seed-fraud.ts",
-    "reset:demo": "node --env-file=../../.env --import tsx scripts/reset-demo.ts"
+    "reset:demo": "node --env-file=../../.env --import tsx scripts/reset-demo.ts",
+    "tunnel": "node --env-file=../../.env --import tsx scripts/tunnel.ts"
   },
   "dependencies": {
     "langsmith": "^0.12.0",

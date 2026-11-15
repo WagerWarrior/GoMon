@@ -12,7 +12,7 @@ export const KEY_KINDS: Record<string, string> = Object.fromEntries(Object.entri
 
 export type Person = { name: string; aliases: string[]; role: string; github: string | null };
 export type PlatformView = {
-  meeting: { callId: string; title: string; platform: "Google Meet"; meetingUrl: string | null; status: string; startedAt: string | null; minutesIn: number; project: { id: string; name: string; description: string }; participants: { name: string; role: string | null; github: string | null }[]; summary: string };
+  meeting: { callId: string; title: string; platform: "Google Meet"; meetingUrl: string | null; status: string; startedAt: string | null; minutesIn: number; project: { id: string; name: string; description: string }; participants: { name: string; role: string | null; github: string | null }[]; inCall: string[] | null; summary: string };
   team: { id: string; name: string; people: Person[]; projects: { id: string; name: string; description: string; memories: number }[] };
   memory: { key: string; kind: string; project: string; projectName: string; version: number; text: string }[];
   atlas: { database: string; counts: Record<string, number>; search: string[] };
@@ -55,6 +55,8 @@ export async function loadPlatform(c: Cols, teamId: string, callId: string): Pro
       status: String(call?.status ?? "unknown"), startedAt: iso(started), minutesIn: started ? Math.max(0, Math.round((Date.now() - started.getTime()) / 60_000)) : 0,
       project: { id: String(call?.projectId ?? ""), name: String(proj?.name ?? call?.projectId ?? "?"), description: String(proj?.description ?? "") },
       participants: ((call?.participants as string[] | undefined) ?? []).map((n) => { const p = who(n); return { name: n, role: p?.role ?? null, github: p?.github ?? null }; }),
+      // From Google Meet itself (Recall join/leave events, roster.ts); null when no events tunnel was up for this call.
+      inCall: Array.isArray(call?.liveParticipants) ? (call.liveParticipants as { name: string }[]).map((p) => p.name) : null,
       summary: typeof call?.summary === "string" ? call.summary : "",
     },
     team: {
@@ -85,6 +87,12 @@ export async function loadPlatform(c: Cols, teamId: string, callId: string): Pro
   };
 }
 
+/** Who is in the call: Meet's live list when the events tunnel was up, else who has spoken. Pure. */
+export function peopleLine(m: Pick<PlatformView["meeting"], "inCall" | "participants">): string {
+  if (m.inCall) return `IN THIS CALL NOW (from Google Meet's participant list, live): ${m.inCall.length ? m.inCall.join(", ") : "nobody besides you"}. Everyone who has been in it: ${m.participants.map((p) => p.name).join(", ") || "nobody yet"}.`;
+  return `PEOPLE WHO HAVE SPOKEN ON THIS CALL: ${m.participants.length ? m.participants.map((p) => `${p.name}${p.role ? ` (${p.role})` : ""}`).join(", ") : "nobody yet"}. Others may be listening without speaking.`;
+}
+
 /** The fixed facts, written for the model. Pure. */
 export function platformFacts(v: PlatformView, agentName = "Gomon"): string {
   const m = v.meeting;
@@ -93,7 +101,7 @@ export function platformFacts(v: PlatformView, agentName = "Gomon"): string {
   return [
     `WHERE YOU ARE: a live Google Meet call. You are ${agentName}, the team's AI teammate, in the call as a bot participant named "${agentName}" (joined through Recall.ai). You hear a live transcript of everyone and speak out loud; links go in the Meet chat.`,
     `THIS CALL: "${m.title}"${m.meetingUrl ? ` (${m.meetingUrl})` : ""}, project "${m.project.name}"${m.project.description ? `: ${m.project.description}` : ""}. You joined about ${m.minutesIn} minute${m.minutesIn === 1 ? "" : "s"} ago.`,
-    `PEOPLE WHO HAVE SPOKEN ON THIS CALL: ${m.participants.length ? m.participants.map((p) => `${p.name}${p.role ? ` (${p.role})` : ""}`).join(", ") : "nobody yet"}. Others may be listening without speaking.`,
+    peopleLine(m),
     `TEAM ${v.team.name}: ${people}. Projects: ${v.team.projects.map((p) => `"${p.name}" (${p.memories} memories)`).join(", ")}.`,
     `TEAM MEMORY KEYS: every locked item has a key by kind (${Object.entries(KEY_KINDS).map(([p, k]) => `${p}- ${k}`).join(", ")}), unique across all projects. People say keys without the dash and call them tickets: "D17" or "ticket D 15" means memory key D-17 / D-15. Latest keys: ${latest || "none"}. MEMORY INDEX lists every one.`,
     `GITHUB TICKETS: issues in ${v.tickets.repo} (${v.tickets.issuesUrl}). You file them from memory when asked ("create the tickets" files every decision locked on this call; "turn D-09 into an issue" files one), titled "<key>: <text>", after a policy check, once per memory version, then you post the link. FILED TICKETS lists what you filed.`,

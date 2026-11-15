@@ -27,6 +27,7 @@ import { createProjectWithBoard } from "./projects.ts";
 import { COMPANY_PROJECT } from "./scope.ts";
 import { startAnnouncer } from "./announce.ts";
 import { handleEars } from "./ears.ts";
+import { startEventsServer } from "./roster.ts";
 import { handleAgentApi } from "./agentapi.ts";
 import { fastReply, wantsFastReply } from "./fast.ts";
 import { releaseHeld, routeAsk, nameOnly, offeredAction, trailingAsk, spokenKeys, TRAIL_MS } from "./hold.ts";
@@ -337,6 +338,8 @@ async function startMeeting(b: Record<string, unknown>, me: PublicUser | null): 
 /** Ending a call: Gomon stops mid-sentence and nothing it had queued is spoken. */
 async function silence(callId: string): Promise<void> {
   await stopSpeaking(c, callId, "meeting_ended");
+  // Nobody is in an ended call (Recall sends no leave events once the bot is out).
+  await c.calls.updateOne({ _id: callId as never }, { $set: { liveParticipants: [] } });
   await c.says.updateMany({ callId, status: { $in: ["queued", "started"] } }, { $set: { status: "cancelled", cancelledBy: "meeting_ended", updatedAt: new Date() } });
 }
 
@@ -577,6 +580,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
+startEventsServer(c);
 server.listen(config.port, () => console.log(`[http] gomon worker on :${config.port} (db ${config.dbName}, team ${config.teamId}, default project ${config.projectId})`));
 // VOICE_OUT=recall: the worker speaks into meetings itself (ElevenLabs mp3 -> Recall output_audio); the bot page only relays webhooks.
 if (process.env.VOICE_OUT === "recall") startRecallVoice(c, console.log);
