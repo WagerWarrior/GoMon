@@ -30,18 +30,16 @@ localhost.run over ssh (nothing to install). The tunnel reaches only the events 
 
 Recall pushes join and leave events only to a public https address. On this Mac the bot runs without one (no tunnel),
 and Recall's bot record has no participant list until the call ends (checked on the demo bot: `meeting_participants`
-is absent, the participant file is released after the call). The free route is a Cloudflare quick tunnel
-(`cloudflared tunnel --url http://localhost:<bot-page port>`): no account, no warning page, a new URL each run. It
-exposes the bot-page server to the internet for the length of the demo; webhooks are signature-checked
-(`RECALL_WEBHOOK_SECRET`).
+is absent, the participant file is released after the call). The tunnel exposes only the events server, for as long
+as `npm run tunnel` runs; it accepts only `POST /recall/events/` carrying `RECALL_WEBHOOK_TOKEN`.
 
 ## Before the next demo
 
 1. `npm run reset:demo` (dry run) then `npm run reset:demo -- --apply`: K-05 has no issue again.
-1. `npm run tunnel` in `apps/worker`, left running: Gomon posts who is in the call when it joins.
-2. `npm run check-keys` in `apps/bot-page`: every key answers (the Anthropic key hit its spending cap once on Nov 14).
-3. `npm run ask -- --demo` in `apps/worker`: five correct answers.
-4. Laptop on the venue Wi-Fi, not the phone hotspot (Atlas refuses the hotspot's address).
+2. `npm run tunnel` in `apps/worker`, left running: Gomon posts who is in the call when it joins.
+3. `npm run check-keys` in `apps/bot-page`: every key answers (the Anthropic key hit its spending cap once on Nov 14).
+4. `npm run ask -- --demo` in `apps/worker`: five correct answers.
+5. Laptop on the venue Wi-Fi, not the phone hotspot (Atlas refuses the hotspot's address).
 
 ## Out of scope
 
