@@ -10,6 +10,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { TUNNEL_FILE } from "../src/recall.ts";
+import { probeStatus, publicLookup } from "../src/tunnel-probe.ts";
 
 const port = Number(process.env.EVENTS_PORT || 3011);
 const target = `127.0.0.1:${port}`;
@@ -37,9 +38,11 @@ function run(i: number): void {
   // A tunnel can stop forwarding while its process lives on (Nov 15: localhost.run answered 502 for a live call's join
   // events, ssh still connected). The events server answers 401 to a tokenless POST; anything else twice in a row is dead.
   let probe: NodeJS.Timeout | undefined, misses = 0;
+  const resolve = publicLookup();
   const watch = (u: string) => {
     probe = setInterval(async () => {
-      const code = await fetch(`${u}/recall/events/`, { method: "POST", signal: AbortSignal.timeout(8000) }).then((r) => r.status).catch(() => 0);
+      // Through public DNS: this Mac's cache can hold "no such host" for a name published seconds ago (tunnel-probe.ts).
+      const code = await probeStatus(`${u}/recall/events/`, resolve);
       misses = code === 401 ? 0 : misses + 1;
       if (misses >= 2) { console.log(`[tunnel] ${u} stopped forwarding (${code || "no answer"} twice); replacing it`); clearInterval(probe); cf?.kill(); }
     }, PROBE_MS);
