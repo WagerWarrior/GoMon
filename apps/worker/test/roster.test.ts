@@ -54,7 +54,8 @@ test("Gomon's context names who is in the Meet when the live list exists, else w
 // Live, Nov 15: Robert joined the Meet as "Robert"; the team knows him as Robert Reder (GitHub Roppax).
 const team: Person[] = [
   { display: "Max Naidenov", login: "naidx0", names: ["max naidenov", "max"] },
-  { display: "Robert Reder", login: "Roppax", names: ["robert reder", "robert", "rob"] },
+  // As in Atlas: the shortest name is the spoken one ("Rob"); the full one is for lists and the transcript.
+  { display: "Rob", full: "Robert Reder", login: "Roppax", names: ["robert reder", "robert", "rob"] },
   { display: "Tamir Azbel", login: "WagerWarrior", names: ["tamir azbel", "tamir"] },
 ];
 

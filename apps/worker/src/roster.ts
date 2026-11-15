@@ -39,7 +39,8 @@ export function parseParticipantEvent(body: unknown, now = Date.now()): RosterEv
 
 /** The team member a Meet display name names ("Robert" -> "Robert Reder"); a stranger keeps the name Meet shows. Pure. */
 export function meetName(name: string, people: Person[]): string {
-  return resolvePerson(people, name, "")?.display ?? name;
+  const p = resolvePerson(people, name, "");
+  return p ? (p.full ?? p.display) : name;
 }
 
 /**

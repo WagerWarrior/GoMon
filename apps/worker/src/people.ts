@@ -8,7 +8,8 @@
  */
 import type { Ctx } from "./governance.ts";
 
-export type Person = { display: string; login: string; names: string[] };
+/** display: the shortest name (spoken: "filing it for Rob"); full: the longest (lists and transcripts: "Robert Reder"). */
+export type Person = { display: string; full?: string; login: string; names: string[] };
 
 /** Team people that have a GitHub login, with every name they go by (lowercase; full names and first names). */
 export async function loadPeople(ctx: Pick<Ctx, "c" | "teamId">): Promise<Person[]> {
@@ -24,6 +25,7 @@ export async function loadPeople(ctx: Pick<Ctx, "c" | "teamId">): Promise<Person
       if (typeof n !== "string" || !n.trim()) continue;
       const full = n.trim();
       if (!p.display || full.length < p.display.length) p.display = full;
+      if (!p.full || full.length > p.full.length) p.full = full;
       p.names.push(full.toLowerCase(), full.split(/\s+/)[0].toLowerCase());
     }
     p.names = [...new Set(p.names)];
