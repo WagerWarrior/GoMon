@@ -29,3 +29,37 @@ test("an events URL that is not https, or no webhook token, asks for no events",
   assert.equal((botRequestBody("https://meet.google.com/x", "c", { ...rc, eventsUrl: "http://localhost:3011" }, media) as Body).recording_config, undefined);
   assert.equal((botRequestBody("https://meet.google.com/x", "c", { ...rc, eventsUrl: "https://a.trycloudflare.com", webhookToken: "" }, media) as Body).recording_config, undefined);
 });
+
+test("Recall refusing the request with events still gets Gomon into the meeting, without them", async () => {
+  const { createBot } = await import("../src/recall.ts");
+  const sent: Body[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("elevenlabs")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    const body = JSON.parse(String(init?.body)) as Body;
+    sent.push(body);
+    return body.recording_config ? new Response('{"recording_config":["unknown field"]}', { status: 400 }) : new Response('{"id":"bot-9"}', { status: 201 });
+  }) as typeof fetch;
+  try {
+    assert.equal(await createBot("https://meet.google.com/abc-defg-hij", "call-1", { ...rc, eventsUrl: "https://a.trycloudflare.com" }), "bot-9");
+    assert.equal(sent.length, 2);
+    assert.ok(sent[0].recording_config);
+    assert.equal(sent[1].recording_config, undefined);
+  } finally { globalThis.fetch = real; }
+});
+
+test("any other failure is still an error (no second bot)", async () => {
+  const { createBot } = await import("../src/recall.ts");
+  let calls = 0;
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL) => {
+    if (String(url).includes("elevenlabs")) return new Response(new Uint8Array([1]), { status: 200 });
+    calls++;
+    return new Response("boom", { status: 500 });
+  }) as typeof fetch;
+  try {
+    await assert.rejects(createBot("https://meet.google.com/abc-defg-hij", "call-2", { ...rc, eventsUrl: "https://a.trycloudflare.com" }), /Recall 500/);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = real; }
+});

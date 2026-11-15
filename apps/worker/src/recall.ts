@@ -79,7 +79,16 @@ export async function createBot(meetingUrl: string, callId: string, rc: RecallCo
   const media = /^https:\/\//.test(rc.publicBaseUrl)
     ? undefined
     : { greetingMp3B64: (await ttsMp3(GREETING)).toString("base64"), cardJpegB64: cardB64("listening") };
-  const bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, { ...rc, eventsUrl: rc.eventsUrl || tunnelUrl() }, media) }, rc);
+  const eventsUrl = rc.eventsUrl || tunnelUrl();
+  let bot: Record<string, unknown>;
+  try {
+    bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, { ...rc, eventsUrl }, media) }, rc);
+  } catch (e) {
+    // Joining matters more than the live roster: if Recall refuses the request with the events endpoint, send it without.
+    if (!eventsUrl || !/^Recall 4\d\d/.test(e instanceof Error ? e.message : "")) throw e;
+    console.error(`[recall] bot with join/leave events refused (${e instanceof Error ? e.message : e}); sending it without them`);
+    bot = await recall("bot/", { method: "POST", body: botRequestBody(meetingUrl, callId, { ...rc, eventsUrl: "" }, media) }, rc);
+  }
   if (typeof bot.id !== "string") throw new Error("Recall returned no bot id");
   return bot.id;
 }
